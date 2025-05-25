@@ -10,9 +10,9 @@ long_description = (this_directory / "README.md").read_text(encoding='utf-8')
 
 setup(
     name="claude-conversation-extractor",
-    version="0.1.0",
+    version="1.0.0",
     author="Dustin Kirby",
-    author_email="",
+    author_email="dustin@zerosumquant.com",
     description="Extract clean conversation logs from Claude Code's internal storage",
     long_description=long_description,
     long_description_content_type="text/markdown",

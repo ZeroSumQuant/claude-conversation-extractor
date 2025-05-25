@@ -1,24 +1,28 @@
 # Claude Conversation Extractor
 
-Extract clean, readable conversation logs from Claude Code's internal storage - no more messy terminal logs!
+Extract clean, readable conversation logs from Claude Code's internal
+storage - no more messy terminal logs!
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## 🎯 Problem Solved
 
-Claude Code stores all your conversations locally but doesn't provide an easy way to export them. This tool:
+Claude Code stores all your conversations locally but doesn't provide an
+easy way to export them. This tool:
 
 - 📤 Extracts conversations from Claude's undocumented JSONL format
-- 📝 Converts them to clean, readable markdown 
+- 📝 Converts them to clean, readable markdown
 - 🔍 Makes your Claude history searchable and archivable
 - 💾 Preserves your work when sessions crash or get cleared
 - 🚀 Works with your existing Claude Code installation
 
 ## ✨ Features
 
-- **Clean Markdown Export**: Get your conversations in readable markdown format
-- **Batch Operations**: Extract single, multiple, or all conversations at once
+- **Clean Markdown Export**: Get your conversations in readable markdown
+  format
+- **Batch Operations**: Extract single, multiple, or all conversations at
+  once
 - **Smart Defaults**: Automatically finds the best location for your logs
 - **Zero Dependencies**: Uses only Python standard library
 - **Session Management**: List, search, and organize your Claude sessions
@@ -26,24 +30,23 @@ Claude Code stores all your conversations locally but doesn't provide an easy wa
 
 ## 📦 Installation
 
-### Quick Install
+### Install with pip (Recommended)
+
+```bash
+pip install claude-conversation-extractor
+```
+
+That's it! The `claude-extract` command will be available system-wide.
+
+### Install from source
 
 ```bash
 # Clone the repository
 git clone https://github.com/ZeroSumQuant/claude-conversation-extractor.git
 cd claude-conversation-extractor
 
-# Make the script executable
-chmod +x extract_claude_logs.py
-
-# Optional: Add to your PATH for system-wide access
-sudo ln -s $(pwd)/extract_claude_logs.py /usr/local/bin/claude-extract
-```
-
-### Install with pip (coming soon)
-
-```bash
-pip install claude-conversation-extractor
+# Install in development mode
+pip install -e .
 ```
 
 ## 🚀 Usage
@@ -52,22 +55,22 @@ pip install claude-conversation-extractor
 
 ```bash
 # List all available Claude sessions
-./extract_claude_logs.py --list
+claude-extract --list
 
 # Extract the most recent conversation
-./extract_claude_logs.py --extract 1
+claude-extract --extract 1
 
 # Extract multiple specific conversations
-./extract_claude_logs.py --extract 1,3,5
+claude-extract --extract 1,3,5
 
 # Extract the 5 most recent conversations
-./extract_claude_logs.py --recent 5
+claude-extract --recent 5
 
 # Extract all conversations
-./extract_claude_logs.py --all
+claude-extract --all
 
 # Specify custom output directory
-./extract_claude_logs.py --extract 1 --output ~/my-claude-logs
+claude-extract --extract 1 --output ~/my-claude-logs
 ```
 
 ### Shell Aliases (Recommended)
@@ -76,9 +79,8 @@ Add these to your `~/.bashrc` or `~/.zshrc`:
 
 ```bash
 # Quick access commands
-alias claude-list='python3 ~/path/to/extract_claude_logs.py --list'
-alias claude-recent='python3 ~/path/to/extract_claude_logs.py --recent 5'
-alias claude-extract='python3 ~/path/to/extract_claude_logs.py --extract'
+alias claude-list='claude-extract --list'
+alias claude-recent='claude-extract --recent 5'
 alias claudelogs='open ~/Desktop/Claude\ logs'  # macOS
 # alias claudelogs='xdg-open ~/Desktop/Claude\ logs'  # Linux
 ```
@@ -87,7 +89,7 @@ alias claudelogs='open ~/Desktop/Claude\ logs'  # macOS
 
 Conversations are saved as markdown files with this structure:
 
-```
+```text
 claude-conversation-2025-05-25-a1b2c3d4.md
 ├── Session metadata (ID, date, time)
 ├── User messages (👤)
@@ -122,7 +124,8 @@ To read a file in Python, you can use the built-in `open()` function...
 
 ### How It Works
 
-1. Claude Code stores conversations in `~/.claude/projects/` as JSONL files
+1. Claude Code stores conversations in `~/.claude/projects/` as JSONL
+   files
 2. This tool parses the undocumented JSONL format
 3. Extracts user prompts and Claude responses
 4. Converts to clean markdown without terminal formatting
@@ -131,7 +134,8 @@ To read a file in Python, you can use the built-in `open()` function...
 ### File Locations
 
 - **Source**: `~/.claude/projects/*/chat_*.jsonl`
-- **Default Output**: `~/Desktop/Claude logs/` (or `~/Documents/Claude logs/`)
+- **Default Output**: `~/Desktop/Claude logs/` (or
+  `~/Documents/Claude logs/`)
 - **Fallback**: Current directory if default locations aren't writable
 
 ### Requirements
@@ -142,7 +146,9 @@ To read a file in Python, you can use the built-in `open()` function...
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
+Contributions are welcome! Please feel free to submit a Pull Request. For
+major changes, please open an issue first to discuss what you would like
+to change.
 
 ### Development Setup
 
@@ -176,15 +182,18 @@ pytest
 ## 🐛 Troubleshooting
 
 ### No sessions found
+
 - Make sure you've used Claude Code at least once
 - Check that `~/.claude/projects/` exists
 - Verify you have read permissions
 
 ### Permission errors
+
 - Ensure you have write access to the output directory
 - Try using `--output` to specify a different location
 
 ### Incomplete conversations
+
 - Some very old sessions might have different formats
 - Crashed sessions may have incomplete data
 
@@ -197,17 +206,24 @@ pytest
 
 ## ⚖️ Disclaimer
 
-This tool accesses conversation data that Claude Code stores locally on your machine. By using this tool:
-- You acknowledge that you're accessing your own user-generated conversation data
-- You are responsible for compliance with any applicable terms of service
-- This tool does not modify, reverse engineer, or interfere with Claude Code's operation
-- The authors are not responsible for any misuse of exported conversation data
+This tool accesses conversation data that Claude Code stores locally on
+your machine. By using this tool:
 
-This is an independent project and is not affiliated with, endorsed by, or sponsored by Anthropic.
+- You acknowledge that you're accessing your own user-generated
+  conversation data
+- You are responsible for compliance with any applicable terms of service
+- This tool does not modify, reverse engineer, or interfere with Claude
+  Code's operation
+- The authors are not responsible for any misuse of exported conversation
+  data
+
+This is an independent project and is not affiliated with, endorsed by, or
+sponsored by Anthropic.
 
 ## 📜 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE)
+file for details.
 
 ## 🙏 Acknowledgments
 
@@ -225,4 +241,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Note**: This tool is not officially affiliated with Anthropic or Claude. It's a community-built solution for managing Claude Code conversations.
+**Note**: This tool is not officially affiliated with Anthropic or Claude.
+It's a community-built solution for managing Claude Code conversations.
