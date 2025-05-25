@@ -6,7 +6,8 @@ First off, thank you for considering contributing to this project! 🎉
 
 ### Reporting Bugs
 
-Before creating bug reports, please check existing issues to avoid duplicates. When creating a bug report, include:
+Before creating bug reports, please check existing issues to avoid duplicates.
+When creating a bug report, include:
 
 - Your operating system and Python version
 - Detailed steps to reproduce the issue
