@@ -30,7 +30,7 @@ Claude Code stores all your conversations locally but doesn't provide an easy wa
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/claude-conversation-extractor.git
+git clone https://github.com/ZeroSumQuant/claude-conversation-extractor.git
 cd claude-conversation-extractor
 
 # Make the script executable
@@ -148,7 +148,7 @@ Contributions are welcome! Please feel free to submit a Pull Request. For major 
 
 ```bash
 # Clone the repo
-git clone https://github.com/yourusername/claude-conversation-extractor.git
+git clone https://github.com/ZeroSumQuant/claude-conversation-extractor.git
 cd claude-conversation-extractor
 
 # Create virtual environment

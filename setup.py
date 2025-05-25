@@ -16,10 +16,10 @@ setup(
     description="Extract clean conversation logs from Claude Code's internal storage",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/yourusername/claude-conversation-extractor",
+    url="https://github.com/ZeroSumQuant/claude-conversation-extractor",
     project_urls={
-        "Bug Tracker": "https://github.com/yourusername/claude-conversation-extractor/issues",
-        "Documentation": "https://github.com/yourusername/claude-conversation-extractor#readme",
+        "Bug Tracker": "https://github.com/ZeroSumQuant/claude-conversation-extractor/issues",
+        "Documentation": "https://github.com/ZeroSumQuant/claude-conversation-extractor#readme",
     },
     classifiers=[
         "Development Status :: 4 - Beta",
