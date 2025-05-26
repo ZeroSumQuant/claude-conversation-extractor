@@ -3,6 +3,7 @@
 ## Quick Recording Steps (macOS)
 
 1. **Prepare your terminal:**
+
    ```bash
    # Set a clean prompt for recording
    export PS1="$ "
@@ -21,6 +22,7 @@
    - Click Record
 
 3. **Run the demo:**
+
    ```bash
    cd ~/Desktop/claude-conversation-extractor
    ./demo-script.sh
@@ -32,6 +34,7 @@
    - Option A: Use [Gifski](https://gif.ski) (best quality)
    - Option B: Use [CloudConvert](https://cloudconvert.com/mov-to-gif)
    - Option C: Use ffmpeg:
+
      ```bash
      ffmpeg -i demo.mov -vf "fps=10,scale=800:-1" -gifflags +transdiff demo.gif
      ```

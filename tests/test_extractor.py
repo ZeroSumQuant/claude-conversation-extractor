@@ -1,16 +1,16 @@
 """Tests for Claude Conversation Extractor"""
 
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
-from datetime import datetime
 from unittest.mock import patch, MagicMock
 
-# Import our extractor
-import sys
+# Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from extract_claude_logs import ClaudeConversationExtractor
+
+from extract_claude_logs import ClaudeConversationExtractor  # noqa: E402
 
 
 class TestClaudeConversationExtractor(unittest.TestCase):
@@ -72,14 +72,14 @@ class TestClaudeConversationExtractor(unittest.TestCase):
                 "timestamp": "2025-05-25T10:00:01Z"
             }
         ]
-        
+
         result = self.extractor.save_as_markdown(conversation, "test-session-id")
-        
+
         self.assertIsNotNone(result)
         self.assertTrue(result.exists())
         self.assertTrue(result.name.startswith("claude-conversation-"))
         self.assertTrue(result.name.endswith(".md"))
-        
+
         # Check content
         content = result.read_text()
         self.assertIn("# Claude Conversation Log", content)
@@ -93,7 +93,7 @@ class TestClaudeConversationExtractor(unittest.TestCase):
         """Test extracting conversation from valid JSONL"""
         # Create a temporary JSONL file
         jsonl_file = Path(self.temp_dir) / "test.jsonl"
-        
+
         entries = [
             {
                 "type": "user",
@@ -112,13 +112,13 @@ class TestClaudeConversationExtractor(unittest.TestCase):
                 "timestamp": "2025-05-25T10:00:01Z"
             }
         ]
-        
+
         with open(jsonl_file, 'w') as f:
             for entry in entries:
                 f.write(json.dumps(entry) + '\n')
-        
+
         conversation = self.extractor.extract_conversation(jsonl_file)
-        
+
         self.assertEqual(len(conversation), 2)
         self.assertEqual(conversation[0]['role'], 'user')
         self.assertEqual(conversation[0]['content'], 'Test message')
@@ -141,9 +141,9 @@ class TestClaudeConversationExtractor(unittest.TestCase):
             MagicMock(stat=MagicMock(return_value=MagicMock(st_mtime=1500))),
         ]
         mock_rglob.return_value = mock_files
-        
+
         sessions = self.extractor.find_sessions()
-        
+
         # Should be sorted by modification time, newest first
         self.assertEqual(len(sessions), 3)
         self.assertEqual(sessions[0].stat().st_mtime, 2000)

@@ -9,12 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
 - Professional badges to README for PyPI, downloads, and stars
 - Comprehensive test suite (coming soon)
 
 ## [1.0.0] - 2025-05-25
 
-### Added
+### 🎉 Initial Release
+
 - Initial release of Claude Conversation Extractor
 - Extract conversations from Claude Code's JSONL storage format
 - Convert conversations to clean, readable markdown files
@@ -31,11 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 100% code quality (flake8, black, markdown lint)
 
 ### Security
+
 - Read-only access to conversation files
 - No external data transmission
 - Safe handling of file paths and user data
 
 ### Documentation
+
 - Comprehensive README with installation and usage instructions
 - CONTRIBUTING guidelines for developers
 - Recording guide for demo updates
