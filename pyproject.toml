@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "claude-conversation-extractor"
-version = "1.0.0"
+version = "1.1.0"
 description = "Extract clean conversation logs from Claude Code's internal storage"
 readme = "README.md"
 authors = [
@@ -39,9 +39,10 @@ Issues = "https://github.com/ZeroSumQuant/claude-conversation-extractor/issues"
 
 [project.scripts]
 claude-extract = "extract_claude_logs:main"
+claude-start = "extract_claude_logs:launch_interactive"
 
 [tool.setuptools]
-py-modules = ["extract_claude_logs"]
+py-modules = ["extract_claude_logs", "interactive_ui"]
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -12,7 +12,7 @@ storage - no more messy terminal logs!
 
 ## 📸 Demo
 
-![Demo](assets/demo.gif)
+![Demo](https://raw.githubusercontent.com/ZeroSumQuant/claude-conversation-extractor/main/assets/demo.gif)
 
 ## 🎯 Problem Solved
 
@@ -57,7 +57,40 @@ cd claude-conversation-extractor
 pip install -e .
 ```
 
-## 🚀 Usage
+## 🚀 Quick Start
+
+```bash
+# Install the package
+pip install claude-conversation-extractor
+
+# Launch the interactive UI
+claude-extract --export logs
+```
+
+That's it! The big magenta UI will guide you through extracting your conversations.
+
+## 🎯 Usage
+
+### Interactive Mode (Easiest!)
+
+```bash
+# Main command
+claude-extract --export logs
+
+# Quick shortcut
+claude-start
+
+# Alternative flags
+claude-extract --interactive
+claude-extract -i
+```
+
+The interactive mode provides:
+- 📁 Easy folder selection with suggestions
+- 📋 Visual list of all your conversations
+- 🎯 Simple selection options (All, Recent, or Specific)
+- 📊 Progress bars during extraction
+- 🗂️ Auto-opens the output folder when done
 
 ### Basic Commands
 
