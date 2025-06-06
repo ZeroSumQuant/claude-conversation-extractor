@@ -5,7 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -24,6 +24,7 @@ class TestClaudeConversationExtractor(unittest.TestCase):
     def tearDown(self):
         """Clean up test fixtures"""
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_initialization(self):
@@ -42,7 +43,7 @@ class TestClaudeConversationExtractor(unittest.TestCase):
         content = [
             {"type": "text", "text": "First part"},
             {"type": "text", "text": "Second part"},
-            {"type": "other", "text": "Should ignore"}
+            {"type": "other", "text": "Should ignore"},
         ]
         result = self.extractor._extract_text_content(content)
         self.assertEqual(result, "First part\nSecond part")
@@ -64,13 +65,13 @@ class TestClaudeConversationExtractor(unittest.TestCase):
             {
                 "role": "user",
                 "content": "Hello Claude",
-                "timestamp": "2025-05-25T10:00:00Z"
+                "timestamp": "2025-05-25T10:00:00Z",
             },
             {
                 "role": "assistant",
                 "content": "Hello! How can I help?",
-                "timestamp": "2025-05-25T10:00:01Z"
-            }
+                "timestamp": "2025-05-25T10:00:01Z",
+            },
         ]
 
         result = self.extractor.save_as_markdown(conversation, "test-session-id")
@@ -97,33 +98,30 @@ class TestClaudeConversationExtractor(unittest.TestCase):
         entries = [
             {
                 "type": "user",
-                "message": {
-                    "role": "user",
-                    "content": "Test message"
-                },
-                "timestamp": "2025-05-25T10:00:00Z"
+                "message": {"role": "user", "content": "Test message"},
+                "timestamp": "2025-05-25T10:00:00Z",
             },
             {
                 "type": "assistant",
                 "message": {
                     "role": "assistant",
-                    "content": [{"type": "text", "text": "Test response"}]
+                    "content": [{"type": "text", "text": "Test response"}],
                 },
-                "timestamp": "2025-05-25T10:00:01Z"
-            }
+                "timestamp": "2025-05-25T10:00:01Z",
+            },
         ]
 
-        with open(jsonl_file, 'w') as f:
+        with open(jsonl_file, "w") as f:
             for entry in entries:
-                f.write(json.dumps(entry) + '\n')
+                f.write(json.dumps(entry) + "\n")
 
         conversation = self.extractor.extract_conversation(jsonl_file)
 
         self.assertEqual(len(conversation), 2)
-        self.assertEqual(conversation[0]['role'], 'user')
-        self.assertEqual(conversation[0]['content'], 'Test message')
-        self.assertEqual(conversation[1]['role'], 'assistant')
-        self.assertEqual(conversation[1]['content'], 'Test response')
+        self.assertEqual(conversation[0]["role"], "user")
+        self.assertEqual(conversation[0]["content"], "Test message")
+        self.assertEqual(conversation[1]["role"], "assistant")
+        self.assertEqual(conversation[1]["content"], "Test response")
 
     def test_extract_conversation_invalid_file(self):
         """Test extracting conversation from non-existent file"""
@@ -131,7 +129,7 @@ class TestClaudeConversationExtractor(unittest.TestCase):
         conversation = self.extractor.extract_conversation(fake_path)
         self.assertEqual(conversation, [])
 
-    @patch('extract_claude_logs.Path.rglob')
+    @patch("extract_claude_logs.Path.rglob")
     def test_find_sessions(self, mock_rglob):
         """Test finding session files"""
         # Mock some session files
@@ -151,5 +149,5 @@ class TestClaudeConversationExtractor(unittest.TestCase):
         self.assertEqual(sessions[2].stat().st_mtime, 1000)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
