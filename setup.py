@@ -18,8 +18,8 @@ class PostInstallCommand(install):
         def print_success_message():
             print("\n🎉 Installation complete!")
             print("\n📋 Quick Start:")
-            print("  claude-extract --export logs    # Launch interactive UI")
-            print("  claude-start                    # Quick shortcut")
+            print("  claude-logs      # Launch interactive UI (recommended)")
+            print("  claude-logs search    # Jump straight to real-time search")
             print("\n⭐ If you find this tool helpful, please star us on GitHub:")
             print("   https://github.com/ZeroSumQuant/claude-conversation-extractor")
             print("\nThank you for using Claude Conversation Extractor! 🚀\n")
@@ -37,7 +37,7 @@ setup(
     version="1.1.0",
     author="Dustin Kirby",
     author_email="dustin@zerosumquant.com",
-    description="Extract clean conversation logs from Claude Code's internal storage",
+    description="Export Claude conversations, extract Claude Code logs, save chat history, search conversations with real-time results",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/ZeroSumQuant/claude-conversation-extractor",
@@ -48,12 +48,17 @@ setup(
         "Documentation": (
             "https://github.com/ZeroSumQuant/claude-conversation-extractor#readme"
         ),
+        "Source": "https://github.com/ZeroSumQuant/claude-conversation-extractor",
     },
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
+        "Intended Audience :: End Users/Desktop",
         "Topic :: Software Development :: Libraries :: Python Modules",
         "Topic :: Text Processing :: Markup :: Markdown",
+        "Topic :: Communications :: Chat",
+        "Topic :: System :: Archiving :: Backup",
+        "Topic :: Utilities",
         "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.8",
@@ -62,11 +67,13 @@ setup(
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
         "Operating System :: OS Independent",
+        "Environment :: Console",
     ],
     python_requires=">=3.8",
-    py_modules=["extract_claude_logs", "interactive_ui"],
+    py_modules=["extract_claude_logs", "interactive_ui", "search", "realtime_search"],
     entry_points={
         "console_scripts": [
+            "claude-logs=extract_claude_logs:launch_interactive",
             "claude-extract=extract_claude_logs:main",
             "claude-start=extract_claude_logs:launch_interactive",
         ],
@@ -75,5 +82,10 @@ setup(
         "install": PostInstallCommand,
     },
     install_requires=[],  # No dependencies!
-    keywords="claude anthropic conversation export markdown logs cli",
+    keywords=(
+        "claude anthropic conversation export markdown logs cli "
+        "claude-code extract-claude save-claude-conversations backup-claude "
+        "claude-chat-history claude-logs export-claude-conversations "
+        "claude-conversation-backup search-claude real-time-search"
+    ),
 )

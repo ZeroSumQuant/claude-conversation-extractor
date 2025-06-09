@@ -243,6 +243,8 @@ Examples:
   %(prog)s --recent 5                # Extract 5 most recent sessions
   %(prog)s --all                     # Extract all sessions
   %(prog)s --output ~/my-logs        # Specify output directory
+  %(prog)s --search "python error"   # Search conversations
+  %(prog)s --search-regex "import.*" # Search with regex
         """,
     )
     parser.add_argument("--list", action="store_true", help="List recent sessions")
@@ -276,6 +278,39 @@ Examples:
         type=str,
         help="Export mode: 'logs' for interactive UI",
     )
+    
+    # Search arguments
+    parser.add_argument(
+        "--search",
+        type=str,
+        help="Search conversations for text (smart search)"
+    )
+    parser.add_argument(
+        "--search-regex",
+        type=str,
+        help="Search conversations using regex pattern"
+    )
+    parser.add_argument(
+        "--search-date-from",
+        type=str,
+        help="Filter search from date (YYYY-MM-DD)"
+    )
+    parser.add_argument(
+        "--search-date-to",
+        type=str,
+        help="Filter search to date (YYYY-MM-DD)"
+    )
+    parser.add_argument(
+        "--search-speaker",
+        choices=["human", "assistant", "both"],
+        default="both",
+        help="Filter search by speaker"
+    )
+    parser.add_argument(
+        "--case-sensitive",
+        action="store_true",
+        help="Make search case-sensitive"
+    )
 
     args = parser.parse_args()
 
@@ -288,9 +323,78 @@ Examples:
 
     # Initialize extractor with optional output directory
     extractor = ClaudeConversationExtractor(args.output)
+    
+    # Handle search mode
+    if args.search or args.search_regex:
+        from search_conversations import ConversationSearcher
+        from datetime import datetime
+        
+        searcher = ConversationSearcher()
+        
+        # Determine search mode and query
+        if args.search_regex:
+            query = args.search_regex
+            mode = "regex"
+        else:
+            query = args.search
+            mode = "smart"
+        
+        # Parse date filters
+        date_from = None
+        date_to = None
+        if args.search_date_from:
+            try:
+                date_from = datetime.strptime(args.search_date_from, "%Y-%m-%d")
+            except ValueError:
+                print(f"❌ Invalid date format: {args.search_date_from}")
+                return
+        
+        if args.search_date_to:
+            try:
+                date_to = datetime.strptime(args.search_date_to, "%Y-%m-%d")
+            except ValueError:
+                print(f"❌ Invalid date format: {args.search_date_to}")
+                return
+        
+        # Speaker filter
+        speaker_filter = None if args.search_speaker == "both" else args.search_speaker
+        
+        # Perform search
+        print(f"🔍 Searching for: {query}")
+        results = searcher.search(
+            query=query,
+            mode=mode,
+            date_from=date_from,
+            date_to=date_to,
+            speaker_filter=speaker_filter,
+            case_sensitive=args.case_sensitive,
+            max_results=30
+        )
+        
+        if not results:
+            print("❌ No matches found.")
+            return
+        
+        print(f"\n✅ Found {len(results)} matches across conversations:")
+        
+        # Group and display results
+        results_by_file = {}
+        for result in results:
+            if result.file_path not in results_by_file:
+                results_by_file[result.file_path] = []
+            results_by_file[result.file_path].append(result)
+        
+        for file_path, file_results in results_by_file.items():
+            print(f"\n📄 {file_path.parent.name} ({len(file_results)} matches)")
+            # Show first match preview
+            first = file_results[0]
+            print(f"   {first.speaker}: {first.matched_content[:100]}...")
+        
+        print(f"\n💡 Tip: Use --interactive mode for more search options and extraction")
+        return
 
     # Default action is to list sessions
-    if args.list or (not args.extract and not args.all and not args.recent):
+    if args.list or (not args.extract and not args.all and not args.recent and not args.search and not args.search_regex):
         sessions = extractor.list_recent_sessions(args.limit)
 
         if sessions and not args.list:
