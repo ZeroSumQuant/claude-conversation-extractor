@@ -1,0 +1,7 @@
+# Optional dependencies for enhanced search functionality
+# Install with: pip install -r requirements-optional.txt
+
+# NLP support for semantic search
+spacy>=3.0.0
+# Download the English model after installing spacy:
+# python -m spacy download en_core_web_sm
