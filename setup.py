@@ -37,7 +37,10 @@ setup(
     version="1.1.0",
     author="Dustin Kirby",
     author_email="dustin@zerosumquant.com",
-    description="Export Claude conversations, extract Claude Code logs, save chat history, search conversations with real-time results",
+    description=(
+        "Export Claude Code conversations from ~/.claude/projects. "
+        "Extract, search, and backup Claude chat history to markdown files."
+    ),
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/ZeroSumQuant/claude-conversation-extractor",
@@ -70,7 +73,12 @@ setup(
         "Environment :: Console",
     ],
     python_requires=">=3.8",
-    py_modules=["extract_claude_logs", "interactive_ui", "search", "realtime_search"],
+    py_modules=[
+        "extract_claude_logs",
+        "interactive_ui",
+        "search_conversations",
+        "realtime_search",
+    ],
     entry_points={
         "console_scripts": [
             "claude-logs=extract_claude_logs:launch_interactive",
@@ -83,9 +91,11 @@ setup(
     },
     install_requires=[],  # No dependencies!
     keywords=(
-        "claude anthropic conversation export markdown logs cli "
-        "claude-code extract-claude save-claude-conversations backup-claude "
-        "claude-chat-history claude-logs export-claude-conversations "
-        "claude-conversation-backup search-claude real-time-search"
+        "export-claude-code-conversations claude-conversation-extractor "
+        "claude-code-export-tool backup-claude-code-logs save-claude-chat-history "
+        "claude-jsonl-to-markdown extract-claude-sessions claude-code-no-export-button "
+        "where-are-claude-code-logs-stored claude-terminal-logs anthropic-claude-code "
+        "search-claude-conversations claude-code-logs-location ~/.claude/projects "
+        "export-claude-conversations extract-claude-code backup-claude-sessions"
     ),
 )

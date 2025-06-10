@@ -1,72 +1,65 @@
-# Changelog
+# Changelog - Claude Conversation Extractor Updates
 
-All notable changes to Claude Conversation Extractor will be documented in
-this file.
+All notable changes to the Claude Code export tool will be documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased] - Features to Export Claude Code Conversations
 
-## [1.1.0] - 2025-06-05
+### Planned
+- Export Claude conversations to PDF format
+- Export Claude Code logs to HTML with syntax highlighting
+- Chrome extension to add export button to Claude Code
+- Automated daily backup of Claude conversations
+- Integration with Obsidian for Claude chat archiving
 
-### Added
+## [1.1.0] - 2025-06-05 - Interactive UI to Export Claude Conversations
 
-- Interactive UI for easy conversation extraction
-- New `claude-start` command for quick access to interactive mode
+### Added - New Ways to Extract Claude Code Logs
+
+- **Interactive UI** for easy Claude conversation extraction
+- New `claude-start` command for quick access to Claude export
 - Support for `--interactive` / `-i` flag to launch UI
-- Support for `--export logs` syntax for consistency
-- Beautiful ASCII art banner in interactive mode
-- Interactive selection of multiple conversations
-- Progress tracking during batch exports
-- Colorful terminal output with status indicators
-- Professional badges to README for PyPI, downloads, and stars
-- Comprehensive test suite with 9 test cases
+- Support for `--export logs` syntax to extract Claude sessions
+- Beautiful ASCII art banner when exporting Claude Code
+- Interactive selection of multiple Claude conversations
+- Progress tracking during batch Claude exports
+- Colorful terminal output showing Claude extraction status
+- Professional badges showing downloads and GitHub stars
+- Comprehensive test suite for reliable Claude export
 
-### Changed
+### Changed - Improved Claude Code Export Experience
 
-- Updated setup.py to include interactive_ui module
+- Updated setup.py to include interactive Claude export UI
 - Enhanced entry points with claude-start shortcut
-- Improved code formatting to pass flake8 linting
+- Improved code formatting for better Claude extractor maintenance
+- Better error messages when Claude Code logs not found
 
-### Fixed
+### Fixed - Claude Export Bug Fixes
 
-- Line length issues in code formatting
-- Trailing whitespace in interactive UI module
-- Version consistency between setup.py and pyproject.toml
+- Line length issues in Claude conversation formatting
+- Trailing whitespace in exported Claude markdown files
+- Version consistency for Claude Conversation Extractor
+- Windows compatibility for Claude Code export paths
 
-## [1.0.0] - 2025-05-25
+## [1.0.0] - 2025-05-25 - First Tool to Export Claude Code Conversations
 
-### 🎉 Initial Release
+### 🎉 Initial Release - The ONLY Claude Code Export Solution
 
-- Initial release of Claude Conversation Extractor
-- Extract conversations from Claude Code's JSONL storage format
-- Convert conversations to clean, readable markdown files
-- List all available Claude sessions with metadata
-- Extract single conversations with `--extract N`
-- Extract multiple recent conversations with `--recent N`
-- Extract all conversations with `--all`
-- Custom output directory support with `--output`
-- Zero dependencies - uses only Python standard library
-- Cross-platform support (Windows, macOS, Linux)
-- Professional documentation with demo GIF
-- PyPI packaging for easy installation via pip
-- GitHub Actions CI/CD pipeline
-- 100% code quality (flake8, black, markdown lint)
+- **First tool** to extract conversations from Claude Code
+- Finds Claude logs in ~/.claude/projects automatically
+- Converts Claude JSONL to clean, readable markdown
+- List all Claude Code sessions with metadata
+- Extract single Claude conversations with `--extract N`
+- Export recent Claude chats with `--recent N`  
+- Backup all Claude conversations with `--all`
+- Custom output directory for Claude exports
+- Zero dependencies - pure Python Claude extractor
+- Cross-platform Claude Code export (Windows/Mac/Linux)
 
-### Security
+---
 
-- Read-only access to conversation files
-- No external data transmission
-- Safe handling of file paths and user data
+**Why This Tool Exists**: Claude Code stores all conversations locally but provides NO export functionality. Users were losing valuable AI programming sessions. This tool solves that problem.
 
-### Documentation
-
-- Comprehensive README with installation and usage instructions
-- CONTRIBUTING guidelines for developers
-- Recording guide for demo updates
-- MIT License with appropriate disclaimers
-
-[Unreleased]: https://github.com/ZeroSumQuant/claude-conversation-extractor/compare/v1.1.0...HEAD
-[1.1.0]: https://github.com/ZeroSumQuant/claude-conversation-extractor/compare/v1.0.0...v1.1.0
-[1.0.0]: https://github.com/ZeroSumQuant/claude-conversation-extractor/releases/tag/v1.0.0
+**Keywords**: claude conversation extractor changelog, claude code export updates, extract claude logs version history, backup claude sessions releases, claude jsonl to markdown changelog

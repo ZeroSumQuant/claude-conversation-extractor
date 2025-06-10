@@ -1,31 +1,33 @@
-# Installation Guide - Claude Conversation Extractor
+# How to Install Claude Conversation Extractor - Export Claude Code Logs
 
-This guide provides detailed installation instructions for all platforms. If you're experiencing installation issues, you're in the right place!
+This guide helps you install the Claude Code export tool on any platform. If you're getting errors trying to export Claude conversations, you're in the right place!
 
 ## Table of Contents
-- [Quick Install (Recommended)](#quick-install-recommended)
+- [Quick Install - Export Claude Code Conversations](#quick-install-export-claude-code-conversations)
 - [Platform-Specific Instructions](#platform-specific-instructions)
-  - [macOS](#macos)
-  - [Windows](#windows)
-  - [Linux](#linux)
-- [Troubleshooting](#troubleshooting)
-- [Alternative Installation Methods](#alternative-installation-methods)
-- [Verifying Installation](#verifying-installation)
+  - [Export Claude Code on macOS](#export-claude-code-on-macos)
+  - [Export Claude Code on Windows](#export-claude-code-on-windows)
+  - [Export Claude Code on Linux](#export-claude-code-on-linux)
+- [Troubleshooting Claude Export Issues](#troubleshooting-claude-export-issues)
+- [Alternative Methods to Export Claude Conversations](#alternative-methods-to-export-claude-conversations)
+- [Verify Claude Conversation Extractor Installation](#verify-claude-conversation-extractor-installation)
 
-## Quick Install (Recommended)
+## Quick Install - Export Claude Code Conversations
 
-The easiest way to install is using pipx, which creates an isolated environment for the tool:
+The easiest way to install the Claude Code export tool is using pipx:
 
 ```bash
-# Install pipx first (see platform-specific sections below)
+# Install pipx first (see platform sections for details)
 pipx install claude-conversation-extractor
 ```
 
+This installs the tool to export Claude Code conversations from ~/.claude/projects to markdown files.
+
 ## Platform-Specific Instructions
 
-### macOS
+### Export Claude Code on macOS
 
-#### Method 1: Using pipx (Recommended)
+#### Method 1: Using pipx (Recommended for Claude Code Export)
 
 ```bash
 # Install pipx via Homebrew
@@ -33,102 +35,98 @@ brew install pipx
 pipx ensurepath
 
 # Restart terminal or run:
-source ~/.zshrc  # or ~/.bash_profile
+source ~/.zshrc  # or ~/.bash_profile for older macOS
 
-# Install the tool
+# Install Claude Conversation Extractor
 pipx install claude-conversation-extractor
+
+# Now you can export Claude Code logs:
+claude-logs
 ```
 
-#### Method 2: Using pip with venv
+#### Method 2: Using pip with venv (Alternative Claude Export Method)
 
 ```bash
-# Create a virtual environment
-python3 -m venv claude-env
-source claude-env/bin/activate
+# Create virtual environment for Claude export tool
+python3 -m venv claude-export-env
+source claude-export-env/bin/activate
 
-# Install the tool
+# Install the Claude Code export tool
 pip install claude-conversation-extractor
 
-# Create an alias for easy access
-echo 'alias claude-logs="source ~/claude-env/bin/activate && claude-logs"' >> ~/.zshrc
+# Create alias to export Claude conversations easily
+echo 'alias claude-logs="source ~/claude-export-env/bin/activate && claude-logs"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-#### Common macOS Issues
+#### Common macOS Issues When Exporting Claude Code
 
-**"command not found" after installation**
+**"command not found" after installing Claude extractor**
 ```bash
-# Check if ~/.local/bin is in PATH
+# Add ~/.local/bin to PATH for Claude export commands
 echo $PATH | grep -q ~/.local/bin || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-**"externally managed environment" error**
-- This is why we recommend pipx - it handles this automatically
-- Alternative: use `pip install --user --break-system-packages` (not recommended)
+**"externally managed environment" error (macOS 13+)**
+- This is why pipx is recommended for Claude Code export
+- Alternative: `pip install --user --break-system-packages claude-conversation-extractor`
 
-### Windows
+### Export Claude Code on Windows
 
-#### Method 1: Using pipx (Recommended)
+#### Method 1: Using pipx (Best for Exporting Claude Conversations)
 
 ```batch
-REM Install pipx
+REM Install pipx for Claude export tool
 py -m pip install --user pipx
 py -m pipx ensurepath
 
 REM Restart Command Prompt or PowerShell
 
-REM Install the tool
+REM Install Claude Conversation Extractor
 pipx install claude-conversation-extractor
+
+REM Export Claude Code conversations:
+claude-logs
 ```
 
-#### Method 2: Using pip with venv
-
-```batch
-REM Create virtual environment
-py -m venv claude-env
-claude-env\Scripts\activate
-
-REM Install the tool
-pip install claude-conversation-extractor
-```
-
-#### PowerShell Users
+#### Method 2: PowerShell Installation for Claude Export
 
 ```powershell
-# If you get execution policy errors:
+# If execution policy blocks Claude export tool:
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
-# Install pipx
+# Install pipx for Claude Code export
 python -m pip install --user pipx
 python -m pipx ensurepath
 
 # Restart PowerShell
 
-# Install the tool
+# Install tool to export Claude conversations
 pipx install claude-conversation-extractor
 ```
 
-#### Common Windows Issues
+#### Common Windows Issues Exporting Claude Code
 
-**"'claude-logs' is not recognized as an internal or external command"**
-1. Ensure Python Scripts folder is in PATH:
+**"'claude-logs' is not recognized" when trying to export Claude conversations**
+1. Add Python Scripts to PATH:
    ```batch
-   REM Add to PATH (adjust username)
+   REM Replace YourUsername with actual username
    setx PATH "%PATH%;C:\Users\YourUsername\AppData\Local\Programs\Python\Python311\Scripts"
    ```
 2. Restart Command Prompt
+3. Try `claude-logs` again to export Claude Code logs
 
-**"Access is denied" errors**
-- Run Command Prompt as Administrator
-- Or use `--user` flag: `pip install --user claude-conversation-extractor`
+**"Access denied" when installing Claude export tool**
+- Run as Administrator
+- Or use: `pip install --user claude-conversation-extractor`
 
-### Linux
+### Export Claude Code on Linux
 
-#### Ubuntu/Debian
+#### Ubuntu/Debian - Install Claude Conversation Extractor
 
 ```bash
-# Install pipx
+# Install pipx for Claude export tool
 sudo apt update
 sudo apt install pipx
 pipx ensurepath
@@ -136,163 +134,187 @@ pipx ensurepath
 # Restart terminal or run:
 source ~/.bashrc
 
-# Install the tool
+# Install tool to export Claude Code conversations
 pipx install claude-conversation-extractor
+
+# Export Claude logs:
+claude-logs
 ```
 
-#### Fedora/RHEL
+#### Fedora/RHEL - Extract Claude Conversations
 
 ```bash
-# Install pipx
+# Install pipx for Claude Code export
 sudo dnf install pipx
 
-# Install the tool
+# Install Claude Conversation Extractor
 pipx install claude-conversation-extractor
 ```
 
-#### Arch Linux
+#### Arch Linux - Backup Claude Code Logs
 
 ```bash
-# Install pipx
+# Install pipx for Claude export functionality
 sudo pacman -S python-pipx
 
-# Install the tool
+# Install tool to extract Claude sessions
 pipx install claude-conversation-extractor
 ```
 
-#### Common Linux Issues
+#### Common Linux Issues When Exporting Claude Code
 
 **"externally managed environment" (Ubuntu 23.04+, Fedora 38+)**
 ```bash
-# This is why pipx is recommended!
-# If you must use pip:
-python3 -m venv ~/claude-venv
-source ~/claude-venv/bin/activate
+# Use pipx to export Claude conversations (recommended)
+# Or create virtual environment:
+python3 -m venv ~/claude-export-venv
+source ~/claude-export-venv/bin/activate
 pip install claude-conversation-extractor
 ```
 
-**Permission denied when accessing Claude logs**
+**"Permission denied" accessing Claude Code logs in ~/.claude/projects**
 ```bash
-# Check permissions
+# Check Claude Code logs permissions
 ls -la ~/.claude/projects/
 
-# If needed, fix permissions
+# Fix permissions to export Claude conversations
 chmod -R u+r ~/.claude/projects/
 ```
 
-## Troubleshooting
+## Troubleshooting Claude Export Issues
 
-### Issue: "No module named 'claude_conversation_extractor'"
+### Can't Find Claude Code Conversations?
 
-**Solution**: The tool uses entry points, not module imports. Use the commands:
+**Check if Claude Code logs exist:**
 ```bash
-claude-logs           # Main command
-claude-logs --help    # Show help
+# macOS/Linux
+ls -la ~/.claude/projects/
+
+# Windows
+dir %USERPROFILE%\.claude\projects\
 ```
 
-### Issue: "Python 3.8+ required"
+**No ~/.claude/projects folder?**
+- You must use Claude Code at least once before exporting
+- The folder contains JSONL files with your conversations
+
+### "No module named 'claude_conversation_extractor'"
+
+The Claude export tool uses commands, not Python imports:
+```bash
+claude-logs           # Main command to export Claude conversations
+claude-logs --help    # Show all export options
+claude-logs --list    # List all Claude Code conversations
+```
+
+### Python Version Issues for Claude Export
 
 **Check Python version:**
 ```bash
-python3 --version
+python3 --version  # Needs 3.8+ to export Claude Code logs
 ```
 
 **Install newer Python:**
 - macOS: `brew install python@3.11`
 - Windows: Download from [python.org](https://python.org)
-- Linux: Use your package manager or pyenv
+- Linux: Use package manager or pyenv
 
-### Issue: Installation succeeds but command not found
+### Claude Export Command Not Found After Installation
 
-**Check installation location:**
+**Verify Claude Conversation Extractor installation:**
 ```bash
 # With pipx
-pipx list
+pipx list | grep claude
 
 # With pip
 pip show claude-conversation-extractor
 ```
 
-**Add to PATH manually:**
+**Add to PATH manually for Claude export:**
 - macOS/Linux: Add `~/.local/bin` to PATH
 - Windows: Add `%APPDATA%\Python\Scripts` to PATH
 
-### Issue: "error: Microsoft Visual C++ 14.0 is required" (Windows)
+## Alternative Methods to Export Claude Conversations
 
-This shouldn't happen with our tool (no compiled dependencies), but if it does:
-1. Install Visual Studio Build Tools
-2. Or use pre-compiled wheels: `pip install --only-binary :all: claude-conversation-extractor`
-
-## Alternative Installation Methods
-
-### From Source
+### Install from Source (Claude Code Export Development)
 
 ```bash
-# Clone repository
+# Clone Claude Conversation Extractor repository
 git clone https://github.com/ZeroSumQuant/claude-conversation-extractor.git
 cd claude-conversation-extractor
 
-# Install in development mode
+# Install Claude export tool in development mode
 pip install -e .
 ```
 
-### Using UV (Fast Python Package Manager)
+### Using UV (Fast Claude Export Installation)
 
 ```bash
-# Install uv
+# Install uv package manager
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install tool
+# Install Claude Conversation Extractor
 uv pip install claude-conversation-extractor
 ```
 
-### Using Poetry
+### Manual Python Script to Export Claude Code
 
+If installation fails, run the extractor directly:
 ```bash
-# In the cloned repository
-poetry install
-poetry run claude-logs
+# Download the Claude export script
+curl -O https://raw.githubusercontent.com/ZeroSumQuant/claude-conversation-extractor/main/extract_claude_logs.py
+
+# Run to export Claude conversations
+python3 extract_claude_logs.py
 ```
 
-## Verifying Installation
+## Verify Claude Conversation Extractor Installation
 
-After installation, verify everything works:
+After installing the Claude Code export tool:
 
 ```bash
-# Check if command is available
+# Check if Claude export command exists
 which claude-logs  # macOS/Linux
 where claude-logs  # Windows
 
-# Test the tool
+# Test Claude Conversation Extractor
 claude-logs --version
 claude-logs --help
 
-# Try listing conversations
+# List your Claude Code conversations
 claude-logs --list
+
+# Export recent Claude sessions
+claude-logs --recent 5
 ```
 
-If you see your conversations listed, installation was successful!
+If you see your Claude conversations listed, the export tool is working!
 
-## Still Having Issues?
+## Still Can't Export Claude Code Conversations?
 
-1. **Check our FAQ**: See README.md for common questions
-2. **GitHub Issues**: Search existing issues or create a new one
-3. **Provide Details**: When reporting issues, include:
-   - Operating system and version
-   - Python version (`python3 --version`)
-   - Installation method used
-   - Complete error message
-   - Output of `pip list` or `pipx list`
+1. **Check Claude Code is installed**: The tool exports from ~/.claude/projects
+2. **Verify Python 3.8+**: Run `python3 --version`
+3. **Try pipx**: Solves most installation issues
+4. **Report issues**: https://github.com/ZeroSumQuant/claude-conversation-extractor/issues
 
-## Entry Points Reference
+Include these details when reporting Claude export problems:
+- Operating system
+- Python version
+- Error message
+- Installation method used
+- Output of `ls ~/.claude/projects/` (or Windows equivalent)
 
-The tool provides these command-line entry points:
-- `claude-logs` - Main interactive interface (recommended)
-- `claude-extract` - Legacy command (kept for compatibility)
-- `claude-start` - Quick start alias
+## Quick Reference - Claude Export Commands
 
-All commands provide the same functionality, use whichever you prefer!
+After installation, these commands export Claude Code conversations:
+- `claude-logs` - Interactive UI to export Claude conversations (recommended)
+- `claude-logs search` - Search and export specific Claude chats
+- `claude-logs --all` - Export all Claude Code conversations at once
+- `claude-logs --recent 10` - Export last 10 Claude sessions
+- `claude-extract` - Legacy command (same functionality)
 
 ---
 
-Remember: pipx is almost always the best installation method. It avoids conflicts, handles PATH automatically, and works on all platforms.
+**Keywords**: install claude conversation extractor, export claude code conversations, claude code export tool, extract claude logs, backup claude sessions, claude jsonl to markdown, ~/.claude/projects export, pip install claude-conversation-extractor
+
+Remember: pipx is the best way to install the Claude Code export tool. It handles everything automatically and works on all platforms where Claude Code runs.

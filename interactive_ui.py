@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import List, Optional
 
 from extract_claude_logs import ClaudeConversationExtractor
-from search_conversations import ConversationSearcher
 from realtime_search import RealTimeSearch, create_smart_searcher
+from search_conversations import ConversationSearcher
 
 
 class InteractiveUI:

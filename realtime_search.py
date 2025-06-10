@@ -6,8 +6,8 @@ Provides live search results as the user types.
 
 import os
 import sys
-import time
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -17,9 +17,9 @@ from typing import List, Optional
 if sys.platform == "win32":
     import msvcrt
 else:
+    import select
     import termios
     import tty
-    import select
 
 
 @dataclass
@@ -192,8 +192,8 @@ class TerminalDisplay:
                     idx = preview.lower().find(query.lower())
                     preview = (
                         preview[:idx]
-                        + f"\033[93m{preview[idx:idx+len(query)]}\033[0m"
-                        + preview[idx + len(query):]
+                        + f"\033[93m{preview[idx:idx + len(query)]}\033[0m"
+                        + preview[idx + len(query) :]
                     )
 
                 print(f"📄 {date_str} | {project} | {preview}...")
@@ -324,7 +324,7 @@ class RealTimeSearch:
         elif key == "BACKSPACE":
             if self.state.cursor_pos > 0:
                 self.state.query = (
-                    self.state.query[:self.state.cursor_pos - 1]
+                    self.state.query[: self.state.cursor_pos - 1]
                     + self.state.query[self.state.cursor_pos :]
                 )
                 self.state.cursor_pos -= 1
@@ -332,7 +332,7 @@ class RealTimeSearch:
 
         elif key and len(key) == 1 and ord(key) >= 32:  # Printable character
             self.state.query = (
-                self.state.query[:self.state.cursor_pos]
+                self.state.query[: self.state.cursor_pos]
                 + key
                 + self.state.query[self.state.cursor_pos :]
             )

@@ -46,11 +46,11 @@ class SearchResult:
     def __str__(self) -> str:
         """User-friendly string representation"""
         return (
-            f"\n{'='*60}\n"
+            f"\n{'=' * 60}\n"
             f"File: {self.file_path.name}\n"
             f"Speaker: {self.speaker.title()}\n"
             f"Relevance: {self.relevance_score:.0%}\n"
-            f"{'='*60}\n"
+            f"{'=' * 60}\n"
             f"{self.context}\n"
         )
 
@@ -619,7 +619,7 @@ class ConversationSearcher:
             # Check if all query tokens appear within a window
             words = content_lower.split()
             for i in range(len(words) - len(query_tokens)):
-                window = set(words[i:i + len(query_tokens) * 2])
+                window = set(words[i : i + len(query_tokens) * 2])
                 if query_tokens.issubset(window):
                     relevance += 0.1
                     break
