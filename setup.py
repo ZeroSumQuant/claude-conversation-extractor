@@ -18,8 +18,10 @@ class PostInstallCommand(install):
         def print_success_message():
             print("\n🎉 Installation complete!")
             print("\n📋 Quick Start:")
-            print("  claude-logs      # Launch interactive UI (recommended)")
-            print("  claude-logs search    # Jump straight to real-time search")
+            print("  claude-extract           # Launch interactive UI (recommended)")
+            print("  claude-extract search    # Jump straight to real-time search")
+            print("  claude-extract --list    # List all conversations")
+            print("  claude-extract --all     # Export all conversations")
             print("\n⭐ If you find this tool helpful, please star us on GitHub:")
             print("   https://github.com/ZeroSumQuant/claude-conversation-extractor")
             print("\nThank you for using Claude Conversation Extractor! 🚀\n")
@@ -78,12 +80,15 @@ setup(
         "interactive_ui",
         "search_conversations",
         "realtime_search",
+        "detailed_export",
+        "export_formats",
+        "conversation_stats",
     ],
     entry_points={
         "console_scripts": [
-            "claude-logs=extract_claude_logs:launch_interactive",
-            "claude-extract=extract_claude_logs:main",
-            "claude-start=extract_claude_logs:launch_interactive",
+            "claude-extract=extract_claude_logs:unified_main",
+            # Temporary aliases for backward compatibility
+            "claude-logs=extract_claude_logs:unified_main",
         ],
     },
     cmdclass={

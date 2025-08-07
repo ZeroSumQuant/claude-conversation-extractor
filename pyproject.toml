@@ -49,12 +49,12 @@ Repository = "https://github.com/ZeroSumQuant/claude-conversation-extractor"
 Issues = "https://github.com/ZeroSumQuant/claude-conversation-extractor/issues"
 
 [project.scripts]
-claude-logs = "extract_claude_logs:launch_interactive"
-claude-extract = "extract_claude_logs:main"
-claude-start = "extract_claude_logs:launch_interactive"
+claude-extract = "extract_claude_logs:unified_main"
+# Temporary alias for backward compatibility
+claude-logs = "extract_claude_logs:unified_main"
 
 [tool.setuptools]
-py-modules = ["extract_claude_logs", "interactive_ui", "search_conversations", "realtime_search"]
+py-modules = ["extract_claude_logs", "interactive_ui", "search_conversations", "realtime_search", "detailed_export", "export_formats", "conversation_stats"]
 
 [tool.setuptools.packages.find]
 where = ["."]

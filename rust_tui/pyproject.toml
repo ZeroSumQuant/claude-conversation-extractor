@@ -1,0 +1,32 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "claude-tui"
+version = "0.1.0"
+description = "High-performance TUI for Claude Conversation Extractor"
+authors = [
+    { name = "Claude Conversation Extractor Team" }
+]
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Rust",
+    "Topic :: Software Development :: User Interfaces",
+    "Topic :: System :: Shells",
+    "Environment :: Console",
+]
+
+[tool.maturin]
+features = ["python"]
+python-source = "python"
+module-name = "claude_tui._claude_tui"

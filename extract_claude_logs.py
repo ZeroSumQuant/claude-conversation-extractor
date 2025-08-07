@@ -13,6 +13,27 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+# Import detailed export functionality
+try:
+    from detailed_export import DetailedTranscriptExtractor
+    DETAILED_EXPORT_AVAILABLE = True
+except ImportError:
+    DETAILED_EXPORT_AVAILABLE = False
+
+# Import export format handlers
+try:
+    from export_formats import ExportManager
+    EXPORT_FORMATS_AVAILABLE = True
+except ImportError:
+    EXPORT_FORMATS_AVAILABLE = False
+
+# Import statistics analyzer
+try:
+    from conversation_stats import ConversationAnalyzer
+    STATS_AVAILABLE = True
+except ImportError:
+    STATS_AVAILABLE = False
+
 
 class ClaudeConversationExtractor:
     """Extract and convert Claude Code conversations from JSONL to markdown."""
@@ -20,6 +41,7 @@ class ClaudeConversationExtractor:
     def __init__(self, output_dir: Optional[Path] = None):
         """Initialize the extractor with Claude's directory and output location."""
         self.claude_dir = Path.home() / ".claude" / "projects"
+        self.export_manager = None
 
         if output_dir:
             self.output_dir = Path(output_dir)
@@ -51,6 +73,10 @@ class ClaudeConversationExtractor:
                 self.output_dir.mkdir(exist_ok=True)
 
         print(f"📁 Saving logs to: {self.output_dir}")
+        
+        # Initialize export manager if available
+        if EXPORT_FORMATS_AVAILABLE:
+            self.export_manager = ExportManager(self.output_dir)
 
     def find_sessions(self, project_path: Optional[str] = None) -> List[Path]:
         """Find all JSONL session files, sorted by most recent first."""
@@ -175,6 +201,78 @@ class ClaudeConversationExtractor:
                 f.write("---\n\n")
 
         return output_path
+    
+    def save_with_format(self, conversation: List[Dict[str, str]], session_id: str,
+                        format: str = "markdown") -> Optional[Path]:
+        """
+        Save conversation in specified format.
+        
+        Args:
+            conversation: List of message dictionaries
+            session_id: Session identifier
+            format: Export format (markdown, json, html)
+            
+        Returns:
+            Path to saved file or None if failed
+        """
+        if not conversation:
+            return None
+        
+        if not EXPORT_FORMATS_AVAILABLE or not self.export_manager:
+            # Fallback to markdown if export formats not available
+            return self.save_as_markdown(conversation, session_id)
+        
+        try:
+            # Build metadata
+            metadata = {
+                "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "message_count": len(conversation),
+                "project": self.claude_dir.name
+            }
+            
+            # Export using the manager
+            return self.export_manager.export(conversation, session_id, format, metadata)
+            
+        except Exception as e:
+            print(f"❌ Error exporting as {format}: {e}")
+            # Fallback to markdown
+            return self.save_as_markdown(conversation, session_id)
+    
+    def extract_detailed_transcript(self, jsonl_path: Path) -> Optional[Path]:
+        """
+        Extract detailed transcript including tool calls and responses.
+        
+        Args:
+            jsonl_path: Path to JSONL file
+            
+        Returns:
+            Path to saved detailed transcript or None if not available
+        """
+        if not DETAILED_EXPORT_AVAILABLE:
+            print("⚠️  Detailed export module not available")
+            return None
+        
+        try:
+            extractor = DetailedTranscriptExtractor(include_system_messages=False)
+            messages = extractor.extract_detailed_conversation(jsonl_path)
+            
+            if not messages:
+                return None
+            
+            # Generate output filename
+            session_id = jsonl_path.stem
+            date_str = datetime.now().strftime("%Y-%m-%d")
+            filename = f"claude-detailed-{date_str}-{session_id[:8]}.md"
+            output_path = self.output_dir / filename
+            
+            # Save detailed transcript
+            extractor.save_detailed_markdown(messages, output_path, include_raw_json=False)
+            
+            return output_path
+            
+        except Exception as e:
+            print(f"❌ Error extracting detailed transcript: {e}")
+            return None
 
     def list_recent_sessions(self, limit: int = 10) -> List[Path]:
         """List recent sessions with details."""
@@ -205,7 +303,8 @@ class ClaudeConversationExtractor:
         return sessions[:limit]
 
     def extract_multiple(
-        self, sessions: List[Path], indices: List[int]
+        self, sessions: List[Path], indices: List[int], detailed: bool = False,
+        format: str = "markdown"
     ) -> Tuple[int, int]:
         """Extract multiple sessions by index."""
         success = 0
@@ -214,17 +313,39 @@ class ClaudeConversationExtractor:
         for idx in indices:
             if 0 <= idx < len(sessions):
                 session_path = sessions[idx]
-                conversation = self.extract_conversation(session_path)
-                if conversation:
-                    output_path = self.save_as_markdown(conversation, session_path.stem)
-                    success += 1
-                    msg_count = len(conversation)
-                    print(
-                        f"✅ {success}/{total}: {output_path.name} "
-                        f"({msg_count} messages)"
-                    )
+                
+                if detailed:
+                    # Extract detailed transcript with tool calls
+                    output_path = self.extract_detailed_transcript(session_path)
+                    if output_path:
+                        success += 1
+                        print(
+                            f"✅ {success}/{total}: {output_path.name} "
+                            f"(detailed transcript)"
+                        )
+                    else:
+                        print(f"⏭️  Skipped session {idx + 1} (no detailed data)")
                 else:
-                    print(f"⏭️  Skipped session {idx + 1} (no conversation)")
+                    # Standard extraction
+                    conversation = self.extract_conversation(session_path)
+                    if conversation:
+                        if format == "markdown":
+                            output_path = self.save_as_markdown(conversation, session_path.stem)
+                        else:
+                            output_path = self.save_with_format(conversation, session_path.stem, format)
+                        
+                        if output_path:
+                            success += 1
+                            msg_count = len(conversation)
+                            format_str = f" [{format}]" if format != "markdown" else ""
+                            print(
+                                f"✅ {success}/{total}: {output_path.name} "
+                                f"({msg_count} messages{format_str})"
+                            )
+                        else:
+                            print(f"❌ Failed to save session {idx + 1}")
+                    else:
+                        print(f"⏭️  Skipped session {idx + 1} (no conversation)")
             else:
                 print(f"❌ Invalid session number: {idx + 1}")
 
@@ -277,6 +398,29 @@ Examples:
         "--export",
         type=str,
         help="Export mode: 'logs' for interactive UI",
+    )
+    
+    # Detailed export argument
+    parser.add_argument(
+        "--detailed",
+        action="store_true",
+        help="Export detailed transcript with tool calls and responses (Ctrl+R style)",
+    )
+    
+    # Format argument
+    parser.add_argument(
+        "--format",
+        type=str,
+        choices=["markdown", "md", "json", "html"],
+        default="markdown",
+        help="Export format (default: markdown)",
+    )
+    
+    # Statistics argument
+    parser.add_argument(
+        "--stats",
+        action="store_true",
+        help="Generate and display conversation statistics",
     )
 
     # Search arguments
@@ -384,6 +528,66 @@ Examples:
         print("\n💡 Tip: Use --interactive mode for more search options and extraction")
         return
 
+    # Handle statistics request
+    if args.stats:
+        if not STATS_AVAILABLE:
+            print("❌ Statistics module not available")
+            return
+            
+        sessions = extractor.find_sessions()
+        if not sessions:
+            print("❌ No sessions found")
+            return
+            
+        print("📊 Analyzing conversations...")
+        analyzer = ConversationAnalyzer()
+        
+        # Analyze all conversations
+        all_conversations = []
+        for session_path in sessions[:20]:  # Limit to 20 for performance
+            conversation = extractor.extract_conversation(session_path)
+            if conversation:
+                all_conversations.append((conversation, session_path.stem))
+        
+        if all_conversations:
+            # Generate aggregate statistics
+            agg_stats = analyzer.analyze_multiple(all_conversations)
+            
+            # Display statistics
+            print("\n" + "=" * 60)
+            print("📊 CONVERSATION STATISTICS")
+            print("=" * 60)
+            print(f"\n📁 Total Conversations: {agg_stats.total_conversations}")
+            print(f"💬 Total Messages: {agg_stats.total_messages:,}")
+            print(f"  - User Messages: {agg_stats.total_user_messages:,}")
+            print(f"  - Assistant Messages: {agg_stats.total_assistant_messages:,}")
+            print(f"\n📝 Text Analysis:")
+            print(f"  - Total Words: {agg_stats.total_words:,}")
+            print(f"  - Estimated Tokens: {agg_stats.estimated_total_tokens:,}")
+            print(f"  - Reading Time: {agg_stats.estimated_total_reading_hours:.1f} hours")
+            print(f"\n⏰ Time Analysis:")
+            if agg_stats.most_active_day:
+                print(f"  - Most Active Day: {agg_stats.most_active_day}")
+            if agg_stats.most_active_hour is not None:
+                print(f"  - Most Active Hour: {agg_stats.most_active_hour}:00")
+            print(f"\n📏 Conversation Lengths:")
+            print(f"  - Average: {agg_stats.average_conversation_length:.1f} messages")
+            print(f"  - Longest: {agg_stats.longest_conversation[1]} messages")
+            print(f"  - Shortest: {agg_stats.shortest_conversation[1]} messages")
+            
+            if agg_stats.common_topics:
+                print(f"\n🔤 Top Topics:")
+                for topic, count in agg_stats.common_topics[:5]:
+                    print(f"  - {topic}: {count} mentions")
+            
+            # Save to file
+            stats_file = extractor.output_dir / "conversation_statistics.json"
+            analyzer.save_aggregate_stats(agg_stats, stats_file)
+            print(f"\n💾 Full statistics saved to: {stats_file}")
+        else:
+            print("❌ No conversations found to analyze")
+        return
+    
     # Default action is to list sessions
     if args.list or (
         not args.extract
@@ -391,6 +595,7 @@ Examples:
         and not args.recent
         and not args.search
         and not args.search_regex
+        and not args.stats
     ):
         sessions = extractor.list_recent_sessions(args.limit)
 
@@ -414,25 +619,34 @@ Examples:
                 continue
 
         if indices:
-            print(f"\n📤 Extracting {len(indices)} session(s)...")
-            success, total = extractor.extract_multiple(sessions, indices)
+            if args.detailed:
+                print(f"\n📤 Extracting {len(indices)} session(s) with detailed transcripts...")
+            else:
+                print(f"\n📤 Extracting {len(indices)} session(s)...")
+            success, total = extractor.extract_multiple(sessions, indices, detailed=args.detailed, format=args.format)
             print(f"\n✅ Successfully extracted {success}/{total} sessions")
 
     elif args.recent:
         sessions = extractor.find_sessions()
         limit = min(args.recent, len(sessions))
-        print(f"\n📤 Extracting {limit} most recent sessions...")
+        if args.detailed:
+            print(f"\n📤 Extracting {limit} most recent sessions with detailed transcripts...")
+        else:
+            print(f"\n📤 Extracting {limit} most recent sessions...")
 
         indices = list(range(limit))
-        success, total = extractor.extract_multiple(sessions, indices)
+        success, total = extractor.extract_multiple(sessions, indices, detailed=args.detailed, format=args.format)
         print(f"\n✅ Successfully extracted {success}/{total} sessions")
 
     elif args.all:
         sessions = extractor.find_sessions()
-        print(f"\n📤 Extracting all {len(sessions)} sessions...")
+        if args.detailed:
+            print(f"\n📤 Extracting all {len(sessions)} sessions with detailed transcripts...")
+        else:
+            print(f"\n📤 Extracting all {len(sessions)} sessions...")
 
         indices = list(range(len(sessions)))
-        success, total = extractor.extract_multiple(sessions, indices)
+        success, total = extractor.extract_multiple(sessions, indices, detailed=args.detailed, format=args.format)
         print(f"\n✅ Successfully extracted {success}/{total} sessions")
 
 
@@ -443,5 +657,27 @@ def launch_interactive():
     interactive_main()
 
 
+def unified_main():
+    """
+    Unified entry point for Claude conversation extraction.
+    
+    Launches interactive UI when called without arguments,
+    or processes CLI arguments for direct operations.
+    """
+    import sys
+    
+    # Special case: if only argument is 'search', launch search UI
+    if len(sys.argv) == 2 and sys.argv[1] == 'search':
+        from realtime_search import main as search_main
+        return search_main()
+    
+    # If no arguments provided (just the command name), launch interactive UI
+    if len(sys.argv) == 1:
+        launch_interactive()
+    else:
+        # Has arguments - use traditional CLI
+        main()
+
+
 if __name__ == "__main__":
-    main()
+    unified_main()

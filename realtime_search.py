@@ -32,6 +32,9 @@ class SearchState:
     selected_index: int = 0
     last_update: float = 0
     is_searching: bool = False
+    needs_redraw: bool = True  # Track when UI needs updating
+    last_drawn_query: str = ""  # Track what was last drawn
+    last_drawn_results_count: int = -1  # Track last result count
 
     def __post_init__(self):
         if self.results is None:
@@ -124,7 +127,9 @@ class TerminalDisplay:
 
     def __init__(self):
         self.last_result_count = 0
-        self.header_lines = 4  # Lines used by header
+        self.header_lines = 3  # Reduced header lines
+        self._last_size_check = 0  # Track when we last checked terminal size
+        self._get_terminal_size()  # Initialize terminal dimensions
 
     def clear_screen(self):
         """Clear the terminal screen"""
@@ -149,71 +154,171 @@ class TerminalDisplay:
         """Restore saved cursor position"""
         print("\033[u", end="")
 
+    def _get_terminal_size(self):
+        """Get current terminal dimensions with caching"""
+        import shutil
+        # Only check terminal size once per second to avoid syscall overhead
+        current_time = time.time()
+        if current_time - self._last_size_check > 1.0:
+            self.cols, self.rows = shutil.get_terminal_size((80, 24))
+            self._last_size_check = current_time
+        return self.cols, self.rows
+
+    def set_color(self, color_code: str):
+        """Set text color using ANSI codes"""
+        print(color_code, end="")
+
+    def reset_color(self):
+        """Reset text formatting"""
+        print("\033[0m", end="")
+
     def draw_header(self):
         """Draw the search interface header"""
+        self._get_terminal_size()
         self.move_cursor(1, 1)
-        print("🔍 REAL-TIME SEARCH")
-        print("=" * 60)
-        print("Type to search • ↑↓ to select • Enter to open • ESC to exit")
-        print("─" * 60)
+
+        # Draw top border
+        print(f"┌─ Claude Conversation Search {'─' * (self.cols - 31)}┐", end="")
+        self.move_cursor(2, 1)
+        print(f"│ ↑↓ Navigate • Enter Select • ESC Exit{' ' * (self.cols - 41)}│", end="")
+        self.move_cursor(3, 1)
+        print(f"├{'─' * (self.cols - 2)}┤", end="")
 
     def draw_results(self, results: List, selected_index: int, query: str):
         """Draw search results with highlighting"""
-        # Clear previous results
-        for i in range(self.last_result_count + 1):
+        self._get_terminal_size()
+
+        # Calculate available space for results
+        available_lines = self.rows - self.header_lines - 6  # Reserve space for search box
+        max_results = min(len(results), available_lines // 3) if results else 0  # 3 lines per result
+
+        # Clear previous results area - ensure we clear at least one line for messages
+        lines_to_clear = max(self.last_result_count * 3 + 2, 2)
+        for i in range(lines_to_clear):
             self.move_cursor(self.header_lines + i + 1, 1)
             self.clear_line()
 
         if not results:
             self.move_cursor(self.header_lines + 1, 1)
+            self.clear_line()
             if query:
-                print(f"No results found for '{query}'")
+                print(f"│ No results found for '{query}'{' ' * (self.cols - len(query) - 25)}│", end="")
             else:
-                print("Start typing to search...")
+                print(f"│ Start typing to search...{' ' * (self.cols - 29)}│", end="")
         else:
             # Display results
-            for i, result in enumerate(results[:10]):  # Show max 10 results
-                self.move_cursor(self.header_lines + i + 1, 1)
+            for i, result in enumerate(results[:max_results]):
+                row_start = self.header_lines + (i * 3) + 1
+                self._draw_single_result(result, i == selected_index, query, row_start)
 
-                # Format result display
-                if i == selected_index:
-                    print("▸ ", end="")  # Selection indicator
-                else:
-                    print("  ", end="")
+        self.last_result_count = min(len(results), max_results)
+        sys.stdout.flush()  # Ensure output is displayed immediately
 
-                # Show result info
-                date_str = result.timestamp.strftime("%Y-%m-%d")
-                project = Path(result.file_path).parent.name[:20]
+    def _draw_single_result(self, result, is_selected: bool, query: str, start_row: int):
+        """Draw a single result with proper highlighting"""
+        # Apply selection highlighting
+        if is_selected:
+            self.set_color("\033[7m")  # Inverse colors
 
-                # Highlight matching text
-                preview = result.context[:60].replace("\n", " ")
-                if query.lower() in preview.lower():
-                    # Simple highlighting - could be improved
-                    idx = preview.lower().find(query.lower())
-                    preview = (
-                        preview[:idx]
-                        + f"\033[93m{preview[idx:idx + len(query)]}\033[0m"
-                        + preview[idx + len(query) :]
-                    )
-
-                print(f"📄 {date_str} | {project} | {preview}...")
-
-        self.last_result_count = len(results[:10])
-
-    def draw_search_box(self, query: str, cursor_pos: int):
-        """Draw the search input box"""
-        # Position at bottom of results
-        row = self.header_lines + self.last_result_count + 3
-        self.move_cursor(row, 1)
+        # Line 1: Empty line for spacing
+        self.move_cursor(start_row, 1)
         self.clear_line()
-        print("─" * 60)
+        print(f"│{' ' * (self.cols - 2)}│", end="")
 
-        self.move_cursor(row + 1, 1)
+        # Line 2: Metadata
+        self.move_cursor(start_row + 1, 1)
         self.clear_line()
-        print(f"Search: {query}", end="")
+        date_str = result.timestamp.strftime("%Y-%m-%d") if result.timestamp else "Unknown"
+        project = Path(result.file_path).parent.name[:30]
+        score = f"{result.relevance_score:.0%}"
 
-        # Position cursor
-        self.move_cursor(row + 1, 9 + cursor_pos)
+        metadata = f" 📄 {date_str} | {project} | {score} match"
+        print(f"│{metadata:<{self.cols - 2}}│", end="")
+
+        # Line 3: Preview
+        self.move_cursor(start_row + 2, 1)
+        preview = self._format_preview(result.context, query, self.cols - 6)
+        print(f"│   {preview:<{self.cols - 5}}│", end="")
+
+        if is_selected:
+            self.reset_color()
+        
+        sys.stdout.flush()
+
+    def _format_preview(self, text: str, query: str, max_width: int) -> str:
+        """Format preview text with query highlighting"""
+        # Clean up text
+        text = ' '.join(text.split())[:200]  # Normalize whitespace
+
+        # Truncate if needed
+        if len(text) > max_width:
+            text = text[:max_width - 3] + "..."
+
+        # Highlight query terms
+        if query:
+            import re
+            # Case-insensitive highlighting
+            pattern = re.compile(re.escape(query), re.IGNORECASE)
+            # Find all matches first
+            matches = list(pattern.finditer(text))
+
+            # Replace from end to beginning to preserve indices
+            for match in reversed(matches):
+                start, end = match.span()
+                highlighted = f"\033[93m{text[start:end]}\033[0m"
+                text = text[:start] + highlighted + text[end:]
+
+        return text
+
+    def draw_search_box(self, query: str, cursor_pos: int, result_count: int = 0,
+                        total_results: int = 0):
+        """Draw the search input box at the bottom like Claude interface"""
+        self._get_terminal_size()
+
+        # Ensure we have enough space for the search box
+        if self.rows < 6:
+            return  # Terminal too small to draw search box
+
+        # Draw status bar
+        self.move_cursor(max(1, self.rows - 3), 1)
+        self.clear_line()
+        print(f"├{'─' * (self.cols - 2)}┤", end="")
+
+        # Show result count
+        self.move_cursor(max(2, self.rows - 2), 1)
+        self.clear_line()
+        if total_results > 0:
+            status = f"Showing {min(result_count, total_results)} of {total_results} results"
+            print(f"│ {status:<{self.cols - 3}}│", end="")
+        else:
+            print(f"│{' ' * (self.cols - 2)}│", end="")
+
+        # Draw search box border and input
+        self.move_cursor(max(3, self.rows - 1), 1)
+        self.clear_line()
+        print(f"├{'─' * (self.cols - 2)}┤", end="")
+
+        self.move_cursor(max(4, self.rows), 1)
+        self.clear_line()
+        # Ensure query fits in the available space
+        max_query_width = self.cols - 13  # Account for "│ Search: " and "│"
+        display_query = query
+        if len(query) > max_query_width:
+            # Show the end of the query if it's too long
+            display_query = "..." + query[-(max_query_width - 3):]
+
+        search_line = f"│ Search: {display_query}"
+        print(f"{search_line:<{self.cols - 1}}│", end="")
+
+        # Position cursor correctly
+        # Calculate actual cursor position considering truncation
+        if len(query) > max_query_width:
+            visual_cursor_pos = min(cursor_pos - (len(query) - max_query_width) + 3,
+                                    len(display_query))
+        else:
+            visual_cursor_pos = cursor_pos
+
+        self.move_cursor(max(4, self.rows), 11 + visual_cursor_pos)
         sys.stdout.flush()
 
 
@@ -247,12 +352,14 @@ class RealTimeSearch:
         if not query:
             with self.search_lock:
                 self.state.results = []
+                self.state.needs_redraw = True  # Trigger redraw
             return True
 
         # Check cache
         if query in self.results_cache:
             with self.search_lock:
                 self.state.results = self.results_cache[query]
+                self.state.needs_redraw = True  # Trigger redraw
             return True
 
         # Perform search
@@ -275,10 +382,12 @@ class RealTimeSearch:
             with self.search_lock:
                 self.state.results = results
                 self.state.selected_index = 0
+                self.state.needs_redraw = True  # Trigger redraw
         except Exception:
             # Handle search errors gracefully
             with self.search_lock:
                 self.state.results = []
+                self.state.needs_redraw = True  # Trigger redraw
 
         return True
 
@@ -309,8 +418,11 @@ class RealTimeSearch:
 
         elif key == "DOWN":
             if self.state.results:
+                # Calculate max visible results based on terminal size
+                max_visible = (self.display.rows - self.display.header_lines - 6) // 3
                 self.state.selected_index = min(
-                    len(self.state.results[:10]) - 1, self.state.selected_index + 1
+                    min(len(self.state.results), max_visible) - 1,
+                    self.state.selected_index + 1
                 )
 
         elif key == "LEFT":
@@ -370,23 +482,40 @@ class RealTimeSearch:
         try:
             self.display.clear_screen()
             self.display.draw_header()
+            
+            # Force initial draw
+            self.state.needs_redraw = True
 
             with KeyboardHandler() as keyboard:
                 while True:
-                    # Draw current state
-                    self.display.draw_results(
-                        self.state.results[:10],
-                        self.state.selected_index,
-                        self.state.query,
-                    )
-                    self.display.draw_search_box(
-                        self.state.query, self.state.cursor_pos
-                    )
+                    # Only redraw if state has changed
+                    if (self.state.needs_redraw or 
+                        self.state.query != self.state.last_drawn_query or
+                        len(self.state.results) != self.state.last_drawn_results_count):
+                        
+                        # Draw current state
+                        self.display.draw_results(
+                            self.state.results,
+                            self.state.selected_index,
+                            self.state.query,
+                        )
+                        self.display.draw_search_box(
+                            self.state.query,
+                            self.state.cursor_pos,
+                            len(self.state.results),
+                            len(self.state.results)
+                        )
+                        
+                        # Update tracking variables
+                        self.state.last_drawn_query = self.state.query
+                        self.state.last_drawn_results_count = len(self.state.results)
+                        self.state.needs_redraw = False
 
                     # Get keyboard input
                     key = keyboard.get_key(timeout=0.1)
                     if key:
                         action = self.handle_input(key)
+                        self.state.needs_redraw = True  # Any input requires redraw
 
                         if action == "exit":
                             return None

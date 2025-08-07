@@ -41,7 +41,7 @@ This is the **ONLY tool that exports Claude Code conversations**:
 - **📝 Claude JSONL to Markdown**: Clean export without terminal artifacts
 - **⚡ Find Any Chat**: Search by content, date, or conversation name
 - **📦 Bulk Export**: Extract all Claude Code conversations at once
-- **🎯 Zero Config**: Just run `claude-logs` - we find everything automatically
+- **🎯 Zero Config**: Just run `claude-extract` - we find everything automatically
 - **🚀 No Dependencies**: Pure Python - no external packages required
 - **🖥️ Cross-Platform**: Export Claude Code logs on any OS
 - **📊 97% Test Coverage**: Reliable extraction you can trust
@@ -93,7 +93,7 @@ pip install claude-conversation-extractor
 ### Quick Start - Export Claude Conversations
 ```bash
 # Just run this - finds all Claude Code logs automatically
-claude-logs
+claude-extract
 ```
 
 That's it! The tool will:
@@ -105,22 +105,22 @@ That's it! The tool will:
 
 ```bash
 # Interactive mode - easiest way to export Claude conversations
-claude-logs
+claude-extract
 
 # List all Claude Code conversations
-claude-logs --list
+claude-extract --list
 
 # Export specific Claude chats by number
-claude-logs --extract 1,3,5
+claude-extract --extract 1,3,5
 
 # Export recent Claude Code sessions
-claude-logs --recent 5
+claude-extract --recent 5
 
 # Backup all Claude conversations at once
-claude-logs --all
+claude-extract --all
 
 # Save Claude logs to custom location
-claude-logs --output ~/my-claude-backups
+claude-extract --output ~/my-claude-backups
 ```
 
 ### 🔍 Search Claude Code Chat History
@@ -129,11 +129,11 @@ Real-time search across all your Claude conversations:
 
 ```bash
 # Method 1: From main menu
-claude-logs
+claude-extract
 # Select "Search conversations"
 
 # Method 2: Direct search
-claude-logs search
+claude-extract search
 ```
 
 **Search features:**
