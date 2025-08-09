@@ -6,11 +6,48 @@ class AppTheme {
   static const _seedColor = Color(0xFF4C7DF2);
 
   static ThemeData buildTheme(Brightness brightness, [ColorScheme? dynamicScheme]) {
-    final scheme = dynamicScheme ?? 
-        ColorScheme.fromSeed(
-          seedColor: _seedColor,
-          brightness: brightness,
-        );
+    // Use a simpler black/white theme for better contrast
+    final ColorScheme scheme;
+    
+    if (brightness == Brightness.light) {
+      // Light theme - white background with dark text
+      scheme = dynamicScheme ?? const ColorScheme.light(
+        brightness: Brightness.light,
+        primary: Color(0xFF4C7DF2),
+        onPrimary: Colors.white,
+        primaryContainer: Color(0xFFE3F2FD),
+        onPrimaryContainer: Color(0xFF0D47A1),
+        secondary: Color(0xFF616161),
+        onSecondary: Colors.white,
+        error: Color(0xFFD32F2F),
+        onError: Colors.white,
+        surface: Colors.white,
+        onSurface: Colors.black87,
+        surfaceContainerLow: Color(0xFFF5F5F5),
+        surfaceContainerHighest: Color(0xFFE0E0E0),
+        outline: Color(0xFFBDBDBD),
+        outlineVariant: Color(0xFFE0E0E0),
+      );
+    } else {
+      // Dark theme - black background with white text
+      scheme = dynamicScheme ?? const ColorScheme.dark(
+        brightness: Brightness.dark,
+        primary: Color(0xFF90CAF9),
+        onPrimary: Color(0xFF003258),
+        primaryContainer: Color(0xFF1E3A5F),
+        onPrimaryContainer: Color(0xFFBBDEFB),
+        secondary: Color(0xFFB0BEC5),
+        onSecondary: Color(0xFF263238),
+        error: Color(0xFFEF5350),
+        onError: Color(0xFF690000),
+        surface: Color(0xFF121212),
+        onSurface: Colors.white,
+        surfaceContainerLow: Color(0xFF1E1E1E),
+        surfaceContainerHighest: Color(0xFF333333),
+        outline: Color(0xFF757575),
+        outlineVariant: Color(0xFF424242),
+      );
+    }
 
     return ThemeData(
       useMaterial3: true,

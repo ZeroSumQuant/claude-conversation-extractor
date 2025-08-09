@@ -2099,6 +2099,7 @@ const InvertedIndex = struct {
             defer {
                 var iter = word_positions.iterator();
                 while (iter.next()) |entry| {
+                    allocator.free(entry.key_ptr.*);  // Free duplicated keys
                     entry.value_ptr.deinit();
                 }
                 word_positions.deinit();
@@ -2128,17 +2129,23 @@ const InvertedIndex = struct {
                 // Tokenize message content
                 var iter = std.mem.tokenizeAny(u8, msg_content, " \t\n.,!?;:()[]{}\"'");
                 while (iter.next()) |word| {
-                    // Skip very short words
-                    if (word.len < 2) continue;
+                    // Skip very short words or very long words (likely data/noise)
+                    if (word.len < 2 or word.len > 100) continue;
                     
                     // Convert to lowercase for case-insensitive search
                     var lower_buf: [256]u8 = [_]u8{0} ** 256;
-                    const lower = std.ascii.lowerString(&lower_buf, word);
+                    const lower = std.ascii.lowerString(lower_buf[0..word.len], word);
+                    
+                    // Duplicate the string for the hash map key
+                    const lower_copy = try allocator.dupe(u8, lower);
                     
                     // Add to position list
-                    const entry = try word_positions.getOrPut(lower);
+                    const entry = try word_positions.getOrPut(lower_copy);
                     if (!entry.found_existing) {
                         entry.value_ptr.* = std.ArrayList(u32).init(allocator);
+                    } else {
+                        // Free the copy if key already exists
+                        allocator.free(lower_copy);
                     }
                     try entry.value_ptr.append(position);
                     position += 1;
@@ -2152,7 +2159,9 @@ const InvertedIndex = struct {
             while (word_iter.next()) |entry| {
                 // For now, store uncompressed - we'll compress in a second pass
                 // This allows us to sort and optimize compression
-                const posting = try index.postings.getOrPut(entry.key_ptr.*);
+                // Duplicate the key for the main postings map
+                const key_copy = try allocator.dupe(u8, entry.key_ptr.*);
+                const posting = try index.postings.getOrPut(key_copy);
                 if (!posting.found_existing) {
                     posting.value_ptr.* = CompressedPostingList{
                         .conversation_ids_compressed = &[_]u8{},
@@ -2160,6 +2169,9 @@ const InvertedIndex = struct {
                         .frequencies_compressed = &[_]u64{},
                         .positions_compressed = &[_][]u8{},
                     };
+                } else {
+                    // Free the duplicate if key already exists
+                    allocator.free(key_copy);
                 }
                 
                 // TODO: Accumulate and compress in batches
@@ -2180,9 +2192,9 @@ const InvertedIndex = struct {
         
         var iter = std.mem.tokenizeAny(u8, query, " \t\n.,!?;:");
         while (iter.next()) |word| {
-            if (word.len < 2) continue;
+            if (word.len < 2 or word.len > 100) continue;
             var lower_buf: [256]u8 = [_]u8{0} ** 256;
-            const lower = std.ascii.lowerString(&lower_buf, word);
+            const lower = std.ascii.lowerString(lower_buf[0..word.len], word);
             try query_terms.append(try self.allocator.dupe(u8, lower));
         }
         defer {
@@ -2272,6 +2284,8 @@ const InvertedIndex = struct {
     pub fn deinit(self: *InvertedIndex) void {
         var iter = self.postings.iterator();
         while (iter.next()) |entry| {
+            // Free the key (duplicated string)
+            self.allocator.free(entry.key_ptr.*);
             // Free compressed data
             self.allocator.free(entry.value_ptr.conversation_ids_compressed);
             self.allocator.free(entry.value_ptr.frequencies_compressed);
@@ -2781,8 +2795,10 @@ fn protocolBuildIndex(
     cancel_flag.store(false, .release);
     
     const root = if (params) |p| blk: {
-        if (p.object.get("root")) |r| {
-            if (r == .string) break :blk r.string;
+        if (p == .object) {
+            if (p.object.get("root")) |r| {
+                if (r == .string) break :blk r.string;
+            }
         }
         break :blk null;
     } else null;
@@ -2861,8 +2877,10 @@ fn protocolListSessions(
     params: ?std.json.Value,
 ) !void {
     const root = if (params) |p| blk: {
-        if (p.object.get("root")) |r| {
-            if (r == .string) break :blk r.string;
+        if (p == .object) {
+            if (p.object.get("root")) |r| {
+                if (r == .string) break :blk r.string;
+            }
         }
         break :blk null;
     } else null;
@@ -2910,11 +2928,13 @@ fn protocolSearch(
     }
     
     const query = if (params) |p| blk: {
-        if (p.object.get("q")) |q| {
-            if (q == .string) break :blk q.string;
-        }
-        if (p.object.get("query")) |q2| {  // alias
-            if (q2 == .string) break :blk q2.string;
+        if (p == .object) {
+            if (p.object.get("q")) |q| {
+                if (q == .string) break :blk q.string;
+            }
+            if (p.object.get("query")) |q2| {  // alias
+                if (q2 == .string) break :blk q2.string;
+            }
         }
         break :blk null;
     } else null;
@@ -2924,7 +2944,18 @@ fn protocolSearch(
         return;
     }
     
-    const results = try current_index.?.search(query.?);
+    // Try to search, but handle failures gracefully
+    const results = current_index.?.search(query.?) catch |err| {
+        std.debug.print("Search failed: {any}\n", .{err});
+        // Return empty results on error
+        var empty_response = std.StringArrayHashMap(std.json.Value).init(allocator);
+        defer empty_response.deinit();
+        var empty_array = std.ArrayList(std.json.Value).init(allocator);
+        defer empty_array.deinit();
+        try empty_response.put("results", .{ .array = empty_array });
+        try sendResult(id, .{ .object = empty_response });
+        return;
+    };
     defer {
         for (results) |r| allocator.free(r.snippet);
         allocator.free(results);
@@ -2936,14 +2967,20 @@ fn protocolSearch(
     for (results[0..@min(100, results.len)]) |r| {
         var obj = std.StringArrayHashMap(std.json.Value).init(allocator);
         
-        const id_str = try std.fmt.allocPrint(allocator, "{d}", .{r.conversation_id});
-        try obj.put("id", .{ .string = id_str });
+        const session_id_str = try std.fmt.allocPrint(allocator, "session_{d}", .{r.conversation_id});
+        try obj.put("session_id", .{ .string = session_id_str });
+        try obj.put("session_name", .{ .string = session_id_str });
         try obj.put("score", .{ .float = r.score });
         try obj.put("snippet", .{ .string = r.snippet });
+        try obj.put("position", .{ .integer = @as(i64, 0) }); // TODO: add position tracking
         try results_array.append(.{ .object = obj });
     }
     
-    try sendResult(id, .{ .array = results_array });
+    // Wrap in a results object as expected by Flutter
+    var response = std.StringArrayHashMap(std.json.Value).init(allocator);
+    defer response.deinit();
+    try response.put("results", .{ .array = results_array });
+    try sendResult(id, .{ .object = response });
 }
 
 fn protocolExtract(
@@ -2953,8 +2990,10 @@ fn protocolExtract(
     params: ?std.json.Value,
 ) !void {
     const session_id = if (params) |p| blk: {
-        if (p.object.get("session_id")) |s| {
-            if (s == .string) break :blk s.string;
+        if (p == .object) {
+            if (p.object.get("session_id")) |s| {
+                if (s == .string) break :blk s.string;
+            }
         }
         break :blk null;
     } else null;
@@ -2965,8 +3004,10 @@ fn protocolExtract(
     }
     
     const format_str = if (params) |p| blk: {
-        if (p.object.get("format")) |f| {
-            if (f == .string) break :blk f.string;
+        if (p == .object) {
+            if (p.object.get("format")) |f| {
+                if (f == .string) break :blk f.string;
+            }
         }
         break :blk "markdown";
     } else "markdown";

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../theme/tokens.dart';
 import '../../core/zig_core_client.dart';
@@ -84,8 +85,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   title: 'Search Conversations',
                   description: 'Find specific topics across all your chats',
                   buttonLabel: 'Open Search',
+                  isPrimary: true,
                   onPressed: () {
-                    // Navigate to search
+                    context.go('/search');
                   },
                 ),
               ] else if (coreState.status == CoreStatus.connecting) ...[
@@ -144,14 +146,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       avatar: const Icon(LucideIcons.clock, size: 16),
                       label: const Text('Recent Sessions'),
                       onPressed: () {
-                        // Navigate to sessions
+                        context.go('/sessions');
                       },
                     ),
                     ActionChip(
                       avatar: const Icon(LucideIcons.terminal, size: 16),
                       label: const Text('View Logs'),
                       onPressed: () {
-                        // Show logs
+                        context.go('/settings');
                       },
                     ),
                     ActionChip(
