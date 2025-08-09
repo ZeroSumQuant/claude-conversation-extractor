@@ -128,7 +128,10 @@ class TerminalDisplay:
     def __init__(self):
         self.last_result_count = 0
         self.header_lines = 3  # Reduced header lines
+<<<<<<< Updated upstream
         self._last_size_check = 0  # Track when we last checked terminal size
+=======
+>>>>>>> Stashed changes
         self._get_terminal_size()  # Initialize terminal dimensions
 
     def clear_screen(self):
@@ -155,6 +158,7 @@ class TerminalDisplay:
         print("\033[u", end="")
 
     def _get_terminal_size(self):
+<<<<<<< Updated upstream
         """Get current terminal dimensions with caching"""
         import shutil
         # Only check terminal size once per second to avoid syscall overhead
@@ -162,6 +166,11 @@ class TerminalDisplay:
         if current_time - self._last_size_check > 1.0:
             self.cols, self.rows = shutil.get_terminal_size((80, 24))
             self._last_size_check = current_time
+=======
+        """Get current terminal dimensions"""
+        import shutil
+        self.cols, self.rows = shutil.get_terminal_size((80, 24))
+>>>>>>> Stashed changes
         return self.cols, self.rows
 
     def set_color(self, color_code: str):
@@ -176,6 +185,7 @@ class TerminalDisplay:
         """Draw the search interface header"""
         self._get_terminal_size()
         self.move_cursor(1, 1)
+<<<<<<< Updated upstream
 
         # Draw top border
         print(f"┌─ Claude Conversation Search {'─' * (self.cols - 31)}┐", end="")
@@ -183,10 +193,18 @@ class TerminalDisplay:
         print(f"│ ↑↓ Navigate • Enter Select • ESC Exit{' ' * (self.cols - 41)}│", end="")
         self.move_cursor(3, 1)
         print(f"├{'─' * (self.cols - 2)}┤", end="")
+=======
+        
+        # Draw top border
+        print(f"┌─ Claude Conversation Search {'─' * (self.cols - 31)}┐")
+        print(f"│ ↑↓ Navigate • Enter Select • ESC Exit{' ' * (self.cols - 41)}│")
+        print(f"├{'─' * (self.cols - 2)}┤")
+>>>>>>> Stashed changes
 
     def draw_results(self, results: List, selected_index: int, query: str):
         """Draw search results with highlighting"""
         self._get_terminal_size()
+<<<<<<< Updated upstream
 
         # Calculate available space for results
         available_lines = self.rows - self.header_lines - 6  # Reserve space for search box
@@ -195,6 +213,15 @@ class TerminalDisplay:
         # Clear previous results area - ensure we clear at least one line for messages
         lines_to_clear = max(self.last_result_count * 3 + 2, 2)
         for i in range(lines_to_clear):
+=======
+        
+        # Calculate available space for results
+        available_lines = self.rows - self.header_lines - 6  # Reserve space for search box
+        max_results = min(len(results), available_lines // 3)  # 3 lines per result
+        
+        # Clear previous results area
+        for i in range(self.last_result_count * 3 + 2):
+>>>>>>> Stashed changes
             self.move_cursor(self.header_lines + i + 1, 1)
             self.clear_line()
 
@@ -202,9 +229,15 @@ class TerminalDisplay:
             self.move_cursor(self.header_lines + 1, 1)
             self.clear_line()
             if query:
+<<<<<<< Updated upstream
                 print(f"│ No results found for '{query}'{' ' * (self.cols - len(query) - 25)}│", end="")
             else:
                 print(f"│ Start typing to search...{' ' * (self.cols - 29)}│", end="")
+=======
+                print(f"│ No results found for '{query}'{' ' * (self.cols - len(query) - 25)}│")
+            else:
+                print(f"│ Start typing to search...{' ' * (self.cols - 29)}│")
+>>>>>>> Stashed changes
         else:
             # Display results
             for i, result in enumerate(results[:max_results]):
@@ -212,13 +245,17 @@ class TerminalDisplay:
                 self._draw_single_result(result, i == selected_index, query, row_start)
 
         self.last_result_count = min(len(results), max_results)
+<<<<<<< Updated upstream
         sys.stdout.flush()  # Ensure output is displayed immediately
+=======
+>>>>>>> Stashed changes
 
     def _draw_single_result(self, result, is_selected: bool, query: str, start_row: int):
         """Draw a single result with proper highlighting"""
         # Apply selection highlighting
         if is_selected:
             self.set_color("\033[7m")  # Inverse colors
+<<<<<<< Updated upstream
 
         # Line 1: Empty line for spacing
         self.move_cursor(start_row, 1)
@@ -299,6 +336,79 @@ class TerminalDisplay:
         print(f"├{'─' * (self.cols - 2)}┤", end="")
 
         self.move_cursor(max(4, self.rows), 1)
+=======
+        
+        # Line 1: Empty line for spacing
+        self.move_cursor(start_row, 1)
+        print(f"│{' ' * (self.cols - 2)}│")
+        
+        # Line 2: Metadata
+        self.move_cursor(start_row + 1, 1)
+        date_str = result.timestamp.strftime("%Y-%m-%d") if result.timestamp else "Unknown"
+        project = Path(result.file_path).parent.name[:30]
+        score = f"{result.relevance_score:.0%}"
+        
+        metadata = f" 📄 {date_str} | {project} | {score} match"
+        print(f"│{metadata:<{self.cols - 2}}│")
+        
+        # Line 3: Preview
+        self.move_cursor(start_row + 2, 1)
+        preview = self._format_preview(result.context, query, self.cols - 6)
+        print(f"│   {preview:<{self.cols - 5}}│")
+        
+        if is_selected:
+            self.reset_color()
+
+    def _format_preview(self, text: str, query: str, max_width: int) -> str:
+        """Format preview text with query highlighting"""
+        # Clean up text
+        text = ' '.join(text.split())[:200]  # Normalize whitespace
+        
+        # Truncate if needed
+        if len(text) > max_width:
+            text = text[:max_width-3] + "..."
+        
+        # Highlight query terms
+        if query:
+            import re
+            # Case-insensitive highlighting
+            pattern = re.compile(re.escape(query), re.IGNORECASE)
+            # Find all matches first
+            matches = list(pattern.finditer(text))
+            
+            # Replace from end to beginning to preserve indices
+            for match in reversed(matches):
+                start, end = match.span()
+                highlighted = f"\033[93m{text[start:end]}\033[0m"
+                text = text[:start] + highlighted + text[end:]
+        
+        return text
+
+    def draw_search_box(self, query: str, cursor_pos: int, result_count: int = 0, total_results: int = 0):
+        """Draw the search input box at the bottom like Claude interface"""
+        self._get_terminal_size()
+        
+        # Draw status bar
+        self.move_cursor(self.rows - 3, 1)
+        self.clear_line()
+        print(f"├{'─' * (self.cols - 2)}┤")
+        
+        # Show result count
+        self.move_cursor(self.rows - 2, 1)
+        self.clear_line()
+        if total_results > 0:
+            status = f"Showing {min(result_count, total_results)} of {total_results} results"
+            print(f"│ {status:<{self.cols - 3}}│")
+        else:
+            print(f"│{' ' * (self.cols - 2)}│")
+        
+        # Draw search box border and input
+        self.move_cursor(self.rows - 1, 1)
+        self.clear_line()
+        print(f"├{'─' * (self.cols - 2)}┤")
+        
+        self.move_cursor(self.rows, 1)
+>>>>>>> Stashed changes
         self.clear_line()
         # Ensure query fits in the available space
         max_query_width = self.cols - 13  # Account for "│ Search: " and "│"
@@ -306,6 +416,7 @@ class TerminalDisplay:
         if len(query) > max_query_width:
             # Show the end of the query if it's too long
             display_query = "..." + query[-(max_query_width - 3):]
+<<<<<<< Updated upstream
 
         search_line = f"│ Search: {display_query}"
         print(f"{search_line:<{self.cols - 1}}│", end="")
@@ -319,6 +430,25 @@ class TerminalDisplay:
             visual_cursor_pos = cursor_pos
 
         self.move_cursor(max(4, self.rows), 11 + visual_cursor_pos)
+=======
+        
+        search_line = f"│ Search: {display_query}"
+        print(f"{search_line:<{self.cols - 1}}│")
+        
+        # Draw bottom border
+        self.move_cursor(self.rows + 1, 1)
+        self.clear_line()
+        print(f"└{'─' * (self.cols - 2)}┘")
+        
+        # Position cursor correctly
+        # Calculate actual cursor position considering truncation
+        if len(query) > max_query_width:
+            visual_cursor_pos = min(cursor_pos - (len(query) - max_query_width) + 3, len(display_query))
+        else:
+            visual_cursor_pos = cursor_pos
+        
+        self.move_cursor(self.rows, 11 + visual_cursor_pos)
+>>>>>>> Stashed changes
         sys.stdout.flush()
 
 
@@ -421,7 +551,11 @@ class RealTimeSearch:
                 # Calculate max visible results based on terminal size
                 max_visible = (self.display.rows - self.display.header_lines - 6) // 3
                 self.state.selected_index = min(
+<<<<<<< Updated upstream
                     min(len(self.state.results), max_visible) - 1,
+=======
+                    min(len(self.state.results), max_visible) - 1, 
+>>>>>>> Stashed changes
                     self.state.selected_index + 1
                 )
 
@@ -488,6 +622,7 @@ class RealTimeSearch:
 
             with KeyboardHandler() as keyboard:
                 while True:
+<<<<<<< Updated upstream
                     # Only redraw if state has changed
                     if (self.state.needs_redraw or 
                         self.state.query != self.state.last_drawn_query or
@@ -510,6 +645,20 @@ class RealTimeSearch:
                         self.state.last_drawn_query = self.state.query
                         self.state.last_drawn_results_count = len(self.state.results)
                         self.state.needs_redraw = False
+=======
+                    # Draw current state
+                    self.display.draw_results(
+                        self.state.results,
+                        self.state.selected_index,
+                        self.state.query,
+                    )
+                    self.display.draw_search_box(
+                        self.state.query, 
+                        self.state.cursor_pos,
+                        len(self.state.results),
+                        len(self.state.results)
+                    )
+>>>>>>> Stashed changes
 
                     # Get keyboard input
                     key = keyboard.get_key(timeout=0.1)
