@@ -1025,10 +1025,10 @@ const VByteEncoder = struct {
         for (numbers) |num| {
             var n = num;
             while (n >= 128) {
-                try result.append(@intCast(n & 0x7F));
+                try result.append(@intCast((n & 0x7F) | 0x80)); // MSB=1 for continuation
                 n >>= 7;
             }
-            try result.append(@intCast(n | 0x80)); // Set continuation bit for last byte
+            try result.append(@intCast(n & 0x7F)); // MSB=0 for last byte
         }
         
         return result.toOwnedSlice();
@@ -1041,11 +1041,11 @@ const VByteEncoder = struct {
         
         for (bytes) |byte| {
             current |= @as(u32, byte & 0x7F) << shift;
-            if (byte & 0x80 != 0) {
+            if (byte & 0x80 == 0) {  // MSB=0 means last byte of number
                 try result.append(current);
                 current = 0;
                 shift = 0;
-            } else {
+            } else {  // MSB=1 means continuation
                 shift += 7;
             }
         }
@@ -1283,9 +1283,9 @@ const QueryVM = struct {
                     // Search directly on compressed data without decompressing!
                     const term_val = self.stack.pop();
                     if (term_val == .term) {
-                        if (self.index.postings.get(term_val.term)) |posting| {
-                            // Push compressed posting directly
-                            try self.stack.append(.{ .compressed_posting = &posting });
+                        if (self.index.postings.getPtr(term_val.term)) |posting_ptr| {
+                            // Use getPtr to get a stable pointer
+                            try self.stack.append(.{ .compressed_posting = posting_ptr });
                         } else {
                             try self.stack.append(.{ .compressed_vbyte = &[_]u8{} });
                         }
@@ -1346,8 +1346,10 @@ const QueryVM = struct {
                             // Lazy decompress only for return
                             return try result.compressed_posting.decompress(self.allocator);
                         } else if (result == .compressed_vbyte) {
-                            // Decode VByte stream
-                            return try VByteEncoder.deltaDecode(self.allocator, result.compressed_vbyte);
+                            // First decode VByte, then delta decode
+                            const decoded = try VByteEncoder.decode(self.allocator, result.compressed_vbyte);
+                            defer self.allocator.free(decoded);
+                            return try VByteEncoder.deltaDecode(self.allocator, decoded);
                         }
                     }
                     return &[_]u32{};
@@ -1642,16 +1644,20 @@ fn RingBuffer(comptime size: usize) type {
         const Self = @This();
         const CACHE_LINE_SIZE = 64;
         
-        data: [size]u8 align(CACHE_LINE_SIZE),
+        data: []u8,
         read_pos: usize align(CACHE_LINE_SIZE),
         write_pos: usize align(CACHE_LINE_SIZE),
         
-        pub fn init() Self {
+        pub fn init(allocator: std.mem.Allocator) !Self {
             return .{
-                .data = [_]u8{0} ** size,
+                .data = try allocator.alloc(u8, size),
                 .read_pos = 0,
                 .write_pos = 0,
             };
+        }
+        
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            allocator.free(self.data);
         }
     
         pub fn write(self: *Self, bytes: []const u8) void {
@@ -1709,13 +1715,19 @@ const CacheAwareBufferChain = struct {
     
     allocator: std.mem.Allocator,
     
-    pub fn init(allocator: std.mem.Allocator) CacheAwareBufferChain {
+    pub fn init(allocator: std.mem.Allocator) !CacheAwareBufferChain {
         return .{
-            .l1_ring = RingBuffer(32 * 1024).init(),
-            .l2_ring = RingBuffer(256 * 1024).init(),
-            .l3_ring = RingBuffer(8 * 1024 * 1024).init(),
+            .l1_ring = try RingBuffer(32 * 1024).init(allocator),
+            .l2_ring = try RingBuffer(256 * 1024).init(allocator),
+            .l3_ring = try RingBuffer(8 * 1024 * 1024).init(allocator),
             .allocator = allocator,
         };
+    }
+    
+    pub fn deinit(self: *CacheAwareBufferChain) void {
+        self.l1_ring.deinit(self.allocator);
+        self.l2_ring.deinit(self.allocator);
+        self.l3_ring.deinit(self.allocator);
     }
     
     // Process data through cache hierarchy with compression
@@ -2057,17 +2069,18 @@ const InvertedIndex = struct {
     avg_conversation_length: f32,
     cache_buffers: CacheAwareBufferChain, // Multi-level cache buffers
     
-    pub fn build(allocator: std.mem.Allocator, conversations: []const *Conversation) !InvertedIndex {
+    pub fn build(allocator: std.mem.Allocator, conversations: []const *Conversation) !*InvertedIndex {
         // Convert to SoA for better performance
         var soa = try ConversationsSoA.init(allocator, conversations);
         
-        var index = InvertedIndex{
+        var index = try allocator.create(InvertedIndex);
+        index.* = InvertedIndex{
             .allocator = allocator,
             .postings = std.StringHashMap(CompressedPostingList).init(allocator),
             .conversations_soa = &soa,
             .total_conversations = conversations.len,
             .avg_conversation_length = 0,
-            .cache_buffers = CacheAwareBufferChain.init(allocator),
+            .cache_buffers = try CacheAwareBufferChain.init(allocator),
         };
         
         // Calculate average length using SIMD-friendly array
@@ -2324,6 +2337,9 @@ const CLI = struct {
             if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
                 try cli_ptr.showHelp();
                 return;
+            } else if (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-V")) {
+                std.debug.print("{s}\n", .{VERSION});
+                return;
             } else if (std.mem.eql(u8, arg, "--list") or std.mem.eql(u8, arg, "-l")) {
                 try cli_ptr.listSessions(null);
                 return;
@@ -2548,7 +2564,10 @@ const CLI = struct {
         
         // Build index and search
         var index = try InvertedIndex.build(self.allocator, conversations.items);
-        defer index.deinit();
+        defer {
+            index.deinit();
+            self.allocator.destroy(index);
+        }
         
         const results = try index.search(query);
         defer {
@@ -2650,13 +2669,9 @@ fn runProtocolMode(allocator: std.mem.Allocator) !void {
         
         if (line_buffer.items.len == 0) continue;
         
-        // Parse request
-        const parsed = std.json.parseFromSlice(
-            struct {
-                id: []const u8,
-                method: []const u8,
-                params: ?std.json.Value = null,
-            },
+        // Parse request robustly
+        const req_val = std.json.parseFromSlice(
+            std.json.Value,
             allocator,
             line_buffer.items,
             .{ .ignore_unknown_fields = true }
@@ -2664,32 +2679,63 @@ fn runProtocolMode(allocator: std.mem.Allocator) !void {
             std.debug.print("Failed to parse request: {any}\n", .{err});
             continue;
         };
-        defer parsed.deinit();
+        defer req_val.deinit();
         
-        const request = parsed.value;
+        const obj = req_val.value.object;
+        
+        // id: accept "123" or 123
+        var id_buf: [32]u8 = undefined;
+        const id_field = obj.get("id") orelse {
+            try sendError("?", "BAD_REQUEST", "missing id");
+            continue;
+        };
+        const id: []const u8 = switch (id_field) {
+            .string => |s| s,
+            .integer => |i| std.fmt.bufPrint(&id_buf, "{d}", .{i}) catch "0",
+            .float => |f| std.fmt.bufPrint(&id_buf, "{d}", .{@as(i64, @intFromFloat(f))}) catch "0",
+            else => "0",
+        };
+        
+        // method + aliases
+        const method_field = obj.get("method") orelse {
+            try sendError(id, "BAD_REQUEST", "missing method");
+            continue;
+        };
+        if (method_field != .string) {
+            try sendError(id, "BAD_REQUEST", "method must be string");
+            continue;
+        }
+        const method_raw = method_field.string;
+        const method = if (std.mem.eql(u8, method_raw, "list")) 
+            "list_sessions" 
+        else 
+            method_raw;
+        
+        // params (optional)
+        const params = obj.get("params");
         
         // Route to handler
-        if (std.mem.eql(u8, request.method, "build_index")) {
-            protocolBuildIndex(allocator, &fs, &current_index, request.id, request.params, &cancel_flag) catch |err| {
-                try sendError(request.id, "INTERNAL_ERROR", @errorName(err));
+        if (std.mem.eql(u8, method, "build_index")) {
+            protocolBuildIndex(allocator, &fs, &current_index, id, params, &cancel_flag) catch |err| {
+                try sendError(id, "INTERNAL_ERROR", @errorName(err));
             };
-        } else if (std.mem.eql(u8, request.method, "list_sessions")) {
-            protocolListSessions(allocator, &fs, request.id, request.params) catch |err| {
-                try sendError(request.id, "INTERNAL_ERROR", @errorName(err));
+        } else if (std.mem.eql(u8, method, "list_sessions")) {
+            protocolListSessions(allocator, &fs, id, params) catch |err| {
+                try sendError(id, "INTERNAL_ERROR", @errorName(err));
             };
-        } else if (std.mem.eql(u8, request.method, "search")) {
-            protocolSearch(allocator, current_index, request.id, request.params) catch |err| {
-                try sendError(request.id, "INTERNAL_ERROR", @errorName(err));
+        } else if (std.mem.eql(u8, method, "search")) {
+            protocolSearch(allocator, current_index, id, params) catch |err| {
+                try sendError(id, "INTERNAL_ERROR", @errorName(err));
             };
-        } else if (std.mem.eql(u8, request.method, "extract")) {
-            protocolExtract(allocator, &fs, request.id, request.params) catch |err| {
-                try sendError(request.id, "INTERNAL_ERROR", @errorName(err));
+        } else if (std.mem.eql(u8, method, "extract")) {
+            protocolExtract(allocator, &fs, id, params) catch |err| {
+                try sendError(id, "INTERNAL_ERROR", @errorName(err));
             };
-        } else if (std.mem.eql(u8, request.method, "cancel")) {
+        } else if (std.mem.eql(u8, method, "cancel")) {
             cancel_flag.store(true, .release);
-            try sendResult(request.id, .{ .string = "cancelled" });
+            try sendResult(id, .{ .string = "cancelled" });
         } else {
-            try sendError(request.id, "UNKNOWN_METHOD", "Unknown method");
+            try sendError(id, "UNKNOWN_METHOD", "Unknown method");
         }
     }
 }
@@ -2797,8 +2843,8 @@ fn protocolBuildIndex(
         allocator.destroy(old_idx);
     }
     
-    current_index.* = try allocator.create(InvertedIndex);
-    current_index.*.?.* = try InvertedIndex.build(allocator, conversations.items);
+    // InvertedIndex.build now returns a pointer
+    current_index.* = try InvertedIndex.build(allocator, conversations.items);
     
     try sendEvent(id, "complete", 1.0);
     
@@ -2866,6 +2912,9 @@ fn protocolSearch(
     const query = if (params) |p| blk: {
         if (p.object.get("q")) |q| {
             if (q == .string) break :blk q.string;
+        }
+        if (p.object.get("query")) |q2| {  // alias
+            if (q2 == .string) break :blk q2.string;
         }
         break :blk null;
     } else null;
@@ -3092,7 +3141,8 @@ fn runBenchmarks() !void {
     
     // Test 4: Ring buffer throughput
     {
-        var ring = RingBuffer(64 * 1024).init();
+        var ring = try RingBuffer(64 * 1024).init(allocator);
+        defer ring.deinit(allocator);
         const test_data = [_]u8{0xAA} ** 1024;
         
         const start = std.time.nanoTimestamp();
@@ -3114,7 +3164,8 @@ fn runBenchmarks() !void {
     
     // Test 5: Cache-aware buffer chain
     {
-        var chain = CacheAwareBufferChain.init(allocator);
+        var chain = try CacheAwareBufferChain.init(allocator);
+        defer chain.deinit();
         const test_data = "test data pattern " ** 100;
         
         const start = std.time.nanoTimestamp();
