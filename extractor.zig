@@ -79,10 +79,8 @@ const FileSystem = struct {
     output_dir: []const u8,
     
     pub fn init(allocator: std.mem.Allocator) !FileSystem {
-        std.debug.print("FileSystem.init: Getting HOME...\n", .{});
         const home = try std.process.getEnvVarOwned(allocator, "HOME");
         defer allocator.free(home);
-        std.debug.print("FileSystem.init: HOME = {s}\n", .{home});
         
         // Build ~/.claude/projects path
         const claude_dir = try std.fmt.allocPrint(allocator, "{s}/.claude/projects", .{home});
@@ -144,9 +142,6 @@ const FileSystem = struct {
                 else => return err,
             }
         };
-        
-        std.debug.print("📁 Claude directory: {s}\n", .{claude_dir});
-        std.debug.print("📁 Output directory: {s}\n", .{final_output_dir});
         
         return FileSystem{
             .allocator = allocator,
@@ -1939,7 +1934,7 @@ const ConversationsSoA = struct {
     message_offsets: []u32,  // Start offset for each conversation's messages
     message_lengths: []u32,  // Number of messages per conversation
     
-    pub fn init(allocator: std.mem.Allocator, conversations: []const Conversation) !ConversationsSoA {
+    pub fn init(allocator: std.mem.Allocator, conversations: []const *Conversation) !ConversationsSoA {
         const n = conversations.len;
         var soa = ConversationsSoA{
             .allocator = allocator,
@@ -2062,7 +2057,7 @@ const InvertedIndex = struct {
     avg_conversation_length: f32,
     cache_buffers: CacheAwareBufferChain, // Multi-level cache buffers
     
-    pub fn build(allocator: std.mem.Allocator, conversations: []const Conversation) !InvertedIndex {
+    pub fn build(allocator: std.mem.Allocator, conversations: []const *Conversation) !InvertedIndex {
         // Convert to SoA for better performance
         var soa = try ConversationsSoA.init(allocator, conversations);
         
@@ -2291,247 +2286,6 @@ const SearchResult = struct {
 // SECTION 6: Terminal UI and Interactive Search
 // ================================================================================
 
-const TerminalUI = struct {
-    allocator: std.mem.Allocator,
-    conversations: []const Conversation,
-    index: *InvertedIndex,
-    selected_index: usize = 0,
-    scroll_offset: usize = 0,
-    search_query: std.ArrayList(u8),
-    search_results: ?[]SearchResult = null,
-    mode: enum { browse, search, view } = .browse,
-    
-    const LINES_PER_PAGE = 20;
-    
-    pub fn init(allocator: std.mem.Allocator, conversations: []const Conversation, index: *InvertedIndex) !TerminalUI {
-        return TerminalUI{
-            .allocator = allocator,
-            .conversations = conversations,
-            .index = index,
-            .search_query = std.ArrayList(u8).init(allocator),
-        };
-    }
-    
-    pub fn deinit(self: *TerminalUI) void {
-        self.search_query.deinit();
-        if (self.search_results) |results| {
-            for (results) |result| {
-                self.allocator.free(result.snippet);
-            }
-            self.allocator.free(results);
-        }
-    }
-    
-    pub fn run(self: *TerminalUI) !void {
-        // Enter alternate screen buffer
-        try std.io.getStdOut().writer().print("\x1b[?1049h", .{});
-        defer std.io.getStdOut().writer().print("\x1b[?1049l", .{}) catch {};
-        
-        // Hide cursor
-        try std.io.getStdOut().writer().print("\x1b[?25l", .{});
-        defer std.io.getStdOut().writer().print("\x1b[?25h", .{}) catch {};
-        
-        // Clear screen
-        try std.io.getStdOut().writer().print("\x1b[2J\x1b[H", .{});
-        
-        // Set up raw mode (simplified for cross-platform)
-        const stdin = std.io.getStdIn();
-        // Note: Raw mode setup is platform-specific and would need proper
-        // termios handling on Unix or Windows console API calls.
-        // For now, we'll use buffered input which works everywhere.
-        
-        while (true) {
-            try self.render();
-            
-            var buf: [1]u8 = [_]u8{0};
-            _ = try stdin.read(&buf);
-            
-            switch (buf[0]) {
-                'q', 'Q' => break,
-                '/' => {
-                    self.mode = .search;
-                    self.search_query.clearRetainingCapacity();
-                },
-                '\x1b' => {
-                    // Escape sequence - read more bytes
-                    var seq: [2]u8 = [_]u8{0} ** 2;
-                    _ = try stdin.read(&seq);
-                    if (seq[0] == '[') {
-                        switch (seq[1]) {
-                            'A' => self.moveUp(), // Up arrow
-                            'B' => self.moveDown(), // Down arrow
-                            else => {},
-                        }
-                    }
-                },
-                '\n', '\r' => {
-                    if (self.mode == .search and self.search_query.items.len > 0) {
-                        try self.performSearch();
-                    } else if (self.mode == .browse) {
-                        self.mode = .view;
-                    }
-                },
-                else => {
-                    if (self.mode == .search) {
-                        try self.search_query.append(buf[0]);
-                    }
-                },
-            }
-        }
-    }
-    
-    fn render(self: *TerminalUI) !void {
-        const stdout = std.io.getStdOut().writer();
-        
-        // Clear screen and move to top
-        try stdout.print("\x1b[2J\x1b[H", .{});
-        
-        // Header
-        try stdout.print("┌─ Claude Conversations ({d} total) ", .{self.conversations.len});
-        for (0..40) |_| try stdout.print("─", .{});
-        try stdout.print("┐\n", .{});
-        
-        // Content based on mode
-        switch (self.mode) {
-            .browse => try self.renderBrowse(),
-            .search => try self.renderSearch(),
-            .view => try self.renderView(),
-        }
-        
-        // Footer
-        try stdout.print("└", .{});
-        for (0..60) |_| try stdout.print("─", .{});
-        try stdout.print("┘\n", .{});
-        
-        // Status line
-        try stdout.print("[q] Quit  [/] Search  [↑↓] Navigate  [Enter] Select\n", .{});
-    }
-    
-    fn renderBrowse(self: *TerminalUI) !void {
-        const stdout = std.io.getStdOut().writer();
-        
-        const start = self.scroll_offset;
-        const end = @min(start + LINES_PER_PAGE, self.conversations.len);
-        
-        for (self.conversations[start..end], start..) |conv, i| {
-            const is_selected = i == self.selected_index;
-            
-            if (is_selected) {
-                try stdout.print("│ > ", .{});
-            } else {
-                try stdout.print("│   ", .{});
-            }
-            
-            // Show project name and message count
-            const name = if (conv.project_name.len > 30) 
-                conv.project_name[0..30] 
-            else 
-                conv.project_name;
-            
-            try stdout.print("{s:<30} {d:>4} msgs  {d:>6} chars\n", .{
-                name,
-                conv.message_count,
-                conv.total_chars,
-            });
-        }
-        
-        // Fill remaining lines
-        const displayed = end - start;
-        for (displayed..LINES_PER_PAGE) |_| {
-            try stdout.print("│\n", .{});
-        }
-    }
-    
-    fn renderSearch(self: *TerminalUI) !void {
-        const stdout = std.io.getStdOut().writer();
-        
-        try stdout.print("│ Search: {s}_\n", .{self.search_query.items});
-        try stdout.print("│\n", .{});
-        
-        if (self.search_results) |results| {
-            for (results[0..@min(results.len, LINES_PER_PAGE - 2)]) |result| {
-                const conv = self.conversations[result.conversation_id];
-                try stdout.print("│ {s:<30} (score: {d:.2})\n", .{
-                    if (conv.project_name.len > 30) conv.project_name[0..30] else conv.project_name,
-                    result.score,
-                });
-            }
-        }
-        
-        // Fill remaining lines
-        const displayed = if (self.search_results) |r| @min(r.len, LINES_PER_PAGE - 2) else 0;
-        for (displayed + 2..LINES_PER_PAGE) |_| {
-            try stdout.print("│\n", .{});
-        }
-    }
-    
-    fn renderView(self: *TerminalUI) !void {
-        const stdout = std.io.getStdOut().writer();
-        
-        const conv = self.conversations[self.selected_index];
-        
-        try stdout.print("│ Project: {s}\n", .{conv.project_name});
-        try stdout.print("│ Messages: {d}  Characters: {d}\n", .{conv.message_count, conv.total_chars});
-        try stdout.print("│\n", .{});
-        
-        // Show first few messages
-        var lines_shown: usize = 3;
-        for (conv.messages[0..@min(conv.messages.len, 5)]) |msg| {
-            const role_str = switch (msg.role) {
-                .user => "User",
-                .assistant => "Claude",
-                .system => "System",
-            };
-            
-            try stdout.print("│ [{s}]\n", .{role_str});
-            
-            // Show first 100 chars of message
-            const preview_len = @min(100, msg.content.len);
-            try stdout.print("│ {s}\n", .{msg.content[0..preview_len]});
-            if (msg.content.len > preview_len) {
-                try stdout.print("│ ...\n", .{});
-            }
-            try stdout.print("│\n", .{});
-            
-            lines_shown += 3;
-            if (lines_shown >= LINES_PER_PAGE - 2) break;
-        }
-        
-        // Fill remaining lines
-        for (lines_shown..LINES_PER_PAGE) |_| {
-            try stdout.print("│\n", .{});
-        }
-    }
-    
-    fn performSearch(self: *TerminalUI) !void {
-        if (self.search_results) |old_results| {
-            for (old_results) |result| {
-                self.allocator.free(result.snippet);
-            }
-            self.allocator.free(old_results);
-        }
-        
-        self.search_results = try self.index.search(self.search_query.items);
-    }
-    
-    fn moveUp(self: *TerminalUI) void {
-        if (self.selected_index > 0) {
-            self.selected_index -= 1;
-            if (self.selected_index < self.scroll_offset) {
-                self.scroll_offset = self.selected_index;
-            }
-        }
-    }
-    
-    fn moveDown(self: *TerminalUI) void {
-        if (self.selected_index < self.conversations.len - 1) {
-            self.selected_index += 1;
-            if (self.selected_index >= self.scroll_offset + LINES_PER_PAGE) {
-                self.scroll_offset = self.selected_index - LINES_PER_PAGE + 1;
-            }
-        }
-    }
-};
 
 // ================================================================================
 // SECTION 7: CLI Interface and Main Function
@@ -2542,15 +2296,11 @@ const CLI = struct {
     fs: FileSystem,
     
     pub fn run(allocator: std.mem.Allocator) !void {
-        std.debug.print("CLI.run starting...\n", .{});
-        
         // Allocate CLI on heap to avoid stack overflow with optimizations
         const cli_ptr = try allocator.create(CLI);
         defer allocator.destroy(cli_ptr);
         
-        std.debug.print("About to initialize FileSystem...\n", .{});
         const fs = try FileSystem.init(allocator);
-        std.debug.print("FileSystem initialized successfully\n", .{});
         
         cli_ptr.* = CLI{
             .allocator = allocator,
@@ -2558,10 +2308,8 @@ const CLI = struct {
         };
         defer cli_ptr.fs.deinit();
         
-        std.debug.print("About to get args...\n", .{});
         const args = try std.process.argsAlloc(allocator);
         defer std.process.argsFree(allocator, args);
-        std.debug.print("Got {} args successfully\n", .{args.len});
         
         if (args.len == 1) {
             try cli_ptr.showHelp();
@@ -2593,9 +2341,6 @@ const CLI = struct {
                 return;
             } else if (std.mem.eql(u8, arg, "--extract-all")) {
                 try cli_ptr.extractAllSessions(.markdown);
-                return;
-            } else if (std.mem.eql(u8, arg, "--tui") or std.mem.eql(u8, arg, "-t")) {
-                try cli_ptr.runTUI();
                 return;
             } else if (std.mem.eql(u8, arg, "--search") or std.mem.eql(u8, arg, "-s")) {
                 if (i + 1 >= args.len) {
@@ -2639,11 +2384,9 @@ const CLI = struct {
             \\  -e, --extract N     Extract conversation N to markdown
             \\  --extract-all       Extract all conversations
             \\  --format FORMAT     Set export format (markdown, json, html)
-            \\  -t, --tui           Launch interactive TUI browser
             \\  -s, --search QUERY  Search conversations for QUERY
             \\
             \\Examples:
-            \\  extractor --tui                     # Launch interactive browser
             \\  extractor --search "python async"   # Search for conversations
             \\  extractor --list                    # List all conversations
             \\  extractor --extract 1                # Extract first conversation
@@ -2766,64 +2509,6 @@ const CLI = struct {
         std.debug.print("\n✅ Successfully exported {d}/{d} conversations\n", .{ success_count, sessions.len });
     }
     
-    fn runTUI(self: *CLI) !void {
-        std.debug.print("🔍 Loading conversations and building search index...\n", .{});
-        
-        // Load all conversations
-        const sessions = try self.fs.findSessions(null);
-        defer {
-            for (sessions) |session| {
-                self.allocator.free(session);
-            }
-            self.allocator.free(sessions);
-        }
-        
-        std.debug.print("📂 Found {d} conversation files\n", .{sessions.len});
-        
-        var parser = try JSONLParser.init(self.allocator);
-        defer parser.deinit();
-        
-        var conversations = std.ArrayList(Conversation).init(self.allocator);
-        defer conversations.deinit();
-        
-        // Load with progress indicator
-        for (sessions, 0..) |session, i| {
-            if (i % 5 == 0 or i == sessions.len - 1) {
-                std.debug.print("\r⏳ Loading: [{d}/{d}] ({d}%)", .{
-                    i + 1,
-                    sessions.len,
-                    ((i + 1) * 100) / sessions.len,
-                });
-            }
-            
-            if (parser.parseFile(session)) |conv| {
-                try conversations.append(conv);
-            } else |_| {
-                // Skip files that fail to parse
-            }
-        }
-        std.debug.print("\n", .{});
-        
-        if (conversations.items.len == 0) {
-            std.debug.print("No conversations found.\n", .{});
-            return;
-        }
-        
-        std.debug.print("🔨 Building search index...\n", .{});
-        
-        // Build inverted index
-        var index = try InvertedIndex.build(self.allocator, conversations.items);
-        defer index.deinit();
-        
-        std.debug.print("✅ Indexed {d} conversations\n", .{conversations.items.len});
-        
-        // Launch TUI
-        var tui = try TerminalUI.init(self.allocator, conversations.items, &index);
-        defer tui.deinit();
-        
-        try tui.run();
-    }
-    
     fn searchConversations(self: *CLI, query: []const u8) !void {
         std.debug.print("🔍 Searching for: {s}\n", .{query});
         
@@ -2839,17 +2524,20 @@ const CLI = struct {
         var parser = try JSONLParser.init(self.allocator);
         defer parser.deinit();
         
-        var conversations = std.ArrayList(Conversation).init(self.allocator);
+        var conversations = std.ArrayList(*Conversation).init(self.allocator);
         defer {
-            for (conversations.items) |*conv| {
+            for (conversations.items) |conv| {
                 self.freeConversation(conv);
+                self.allocator.destroy(conv);
             }
             conversations.deinit();
         }
         
         for (sessions) |session| {
             if (parser.parseFile(session)) |conv| {
-                try conversations.append(conv);
+                const conv_ptr = try self.allocator.create(Conversation);
+                conv_ptr.* = conv;
+                try conversations.append(conv_ptr);
             } else |_| {}
         }
         
@@ -2924,22 +2612,400 @@ const CLI = struct {
 };
 
 // ================================================================================
-// SECTION 6: Main Function
+// SECTION 6: NDJSON Protocol Mode for Flutter Integration
+// ================================================================================
+
+const ProtocolVersion = 1;
+const CoreVersion = "2.1.0";
+
+fn runProtocolMode(allocator: std.mem.Allocator) !void {
+    // Send hello message
+    try sendHello();
+    
+    // Initialize context
+    var fs = try FileSystem.init(allocator);
+    defer fs.deinit();
+    
+    var current_index: ?*InvertedIndex = null;
+    defer if (current_index) |idx| {
+        idx.deinit();
+        allocator.destroy(idx);
+    };
+    
+    var cancel_flag = std.atomic.Value(bool).init(false);
+    
+    // Main protocol loop
+    const stdin = std.io.getStdIn().reader();
+    var line_buffer = std.ArrayList(u8).init(allocator);
+    defer line_buffer.deinit();
+    
+    while (true) {
+        line_buffer.clearRetainingCapacity();
+        
+        // Read line from stdin
+        stdin.streamUntilDelimiter(line_buffer.writer(), '\n', null) catch |err| {
+            if (err == error.EndOfStream) break;
+            return err;
+        };
+        
+        if (line_buffer.items.len == 0) continue;
+        
+        // Parse request
+        const parsed = std.json.parseFromSlice(
+            struct {
+                id: []const u8,
+                method: []const u8,
+                params: ?std.json.Value = null,
+            },
+            allocator,
+            line_buffer.items,
+            .{ .ignore_unknown_fields = true }
+        ) catch |err| {
+            std.debug.print("Failed to parse request: {any}\n", .{err});
+            continue;
+        };
+        defer parsed.deinit();
+        
+        const request = parsed.value;
+        
+        // Route to handler
+        if (std.mem.eql(u8, request.method, "build_index")) {
+            protocolBuildIndex(allocator, &fs, &current_index, request.id, request.params, &cancel_flag) catch |err| {
+                try sendError(request.id, "INTERNAL_ERROR", @errorName(err));
+            };
+        } else if (std.mem.eql(u8, request.method, "list_sessions")) {
+            protocolListSessions(allocator, &fs, request.id, request.params) catch |err| {
+                try sendError(request.id, "INTERNAL_ERROR", @errorName(err));
+            };
+        } else if (std.mem.eql(u8, request.method, "search")) {
+            protocolSearch(allocator, current_index, request.id, request.params) catch |err| {
+                try sendError(request.id, "INTERNAL_ERROR", @errorName(err));
+            };
+        } else if (std.mem.eql(u8, request.method, "extract")) {
+            protocolExtract(allocator, &fs, request.id, request.params) catch |err| {
+                try sendError(request.id, "INTERNAL_ERROR", @errorName(err));
+            };
+        } else if (std.mem.eql(u8, request.method, "cancel")) {
+            cancel_flag.store(true, .release);
+            try sendResult(request.id, .{ .string = "cancelled" });
+        } else {
+            try sendError(request.id, "UNKNOWN_METHOD", "Unknown method");
+        }
+    }
+}
+
+fn sendHello() !void {
+    const stdout = std.io.getStdOut().writer();
+    try stdout.print(
+        \\{{"type":"hello","core_version":"{s}","protocol":{d},"capabilities":["index","search","extract","list"]}}
+    ++ "\n", .{ CoreVersion, ProtocolVersion });
+}
+
+fn sendEvent(id: []const u8, stage: []const u8, progress: f32) !void {
+    const stdout = std.io.getStdOut().writer();
+    try stdout.print(
+        \\{{"id":"{s}","type":"event","stage":"{s}","progress":{d:.2}}}
+    ++ "\n", .{ id, stage, progress });
+}
+
+fn sendResult(id: []const u8, data: std.json.Value) !void {
+    const stdout = std.io.getStdOut().writer();
+    try stdout.print(
+        \\{{"id":"{s}","type":"result","data":
+    , .{id});
+    try std.json.stringify(data, .{}, stdout);
+    try stdout.print("}}\n", .{});
+}
+
+fn sendError(id: []const u8, code: []const u8, message: []const u8) !void {
+    const stdout = std.io.getStdOut().writer();
+    try stdout.print(
+        \\{{"id":"{s}","type":"error","error":{{"code":"{s}","message":"{s}"}}}}
+    ++ "\n", .{ id, code, message });
+}
+
+fn protocolBuildIndex(
+    allocator: std.mem.Allocator,
+    fs: *FileSystem,
+    current_index: *?*InvertedIndex,
+    id: []const u8,
+    params: ?std.json.Value,
+    cancel_flag: *std.atomic.Value(bool),
+) !void {
+    cancel_flag.store(false, .release);
+    
+    const root = if (params) |p| blk: {
+        if (p.object.get("root")) |r| {
+            if (r == .string) break :blk r.string;
+        }
+        break :blk null;
+    } else null;
+    
+    try sendEvent(id, "scan", 0.0);
+    
+    const sessions = try fs.findSessions(root);
+    defer {
+        for (sessions) |session| allocator.free(session);
+        allocator.free(sessions);
+    }
+    
+    if (cancel_flag.load(.acquire)) {
+        try sendError(id, "CANCELLED", "Operation cancelled");
+        return;
+    }
+    
+    try sendEvent(id, "parse", 0.2);
+    
+    var conversations = std.ArrayList(*Conversation).init(allocator);
+    defer {
+        for (conversations.items) |conv| {
+            allocator.free(conv.id);
+            allocator.free(conv.project_name);
+            allocator.free(conv.file_path);
+            for (conv.messages) |msg| {
+                allocator.free(msg.content);
+            }
+            allocator.free(conv.messages);
+            allocator.destroy(conv);
+        }
+        conversations.deinit();
+    }
+    
+    var parser = try StreamingJSONLParser.init(allocator);
+    defer parser.deinit();
+    
+    for (sessions, 0..) |session, i| {
+        if (cancel_flag.load(.acquire)) {
+            try sendError(id, "CANCELLED", "Operation cancelled");
+            return;
+        }
+        
+        const progress = 0.2 + (0.4 * @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(sessions.len)));
+        try sendEvent(id, "parse", progress);
+        
+        if (parser.parseFile(session)) |conv| {
+            const conv_ptr = try allocator.create(Conversation);
+            conv_ptr.* = conv;
+            try conversations.append(conv_ptr);
+        } else |_| {}
+    }
+    
+    try sendEvent(id, "index", 0.7);
+    
+    if (current_index.*) |old_idx| {
+        old_idx.deinit();
+        allocator.destroy(old_idx);
+    }
+    
+    current_index.* = try allocator.create(InvertedIndex);
+    current_index.*.?.* = try InvertedIndex.build(allocator, conversations.items);
+    
+    try sendEvent(id, "complete", 1.0);
+    
+    var result = std.StringArrayHashMap(std.json.Value).init(allocator);
+    try result.put("status", .{ .string = "ok" });
+    try result.put("conversations", .{ .integer = @intCast(conversations.items.len) });
+    try sendResult(id, .{ .object = result });
+}
+
+fn protocolListSessions(
+    allocator: std.mem.Allocator,
+    fs: *FileSystem,
+    id: []const u8,
+    params: ?std.json.Value,
+) !void {
+    const root = if (params) |p| blk: {
+        if (p.object.get("root")) |r| {
+            if (r == .string) break :blk r.string;
+        }
+        break :blk null;
+    } else null;
+    
+    const sessions = try fs.findSessions(root);
+    defer {
+        for (sessions) |session| allocator.free(session);
+        allocator.free(sessions);
+    }
+    
+    var sessions_array = std.ArrayList(std.json.Value).init(allocator);
+    defer sessions_array.deinit();
+    
+    for (sessions, 0..) |session, i| {
+        var obj = std.StringArrayHashMap(std.json.Value).init(allocator);
+        
+        const id_str = try std.fmt.allocPrint(allocator, "session_{d}", .{i});
+        try obj.put("id", .{ .string = id_str });
+        try obj.put("path", .{ .string = session });
+        try obj.put("name", .{ .string = std.fs.path.basename(session) });
+        
+        if (std.fs.cwd().statFile(session)) |stat| {
+            try obj.put("size", .{ .integer = @intCast(stat.size) });
+            try obj.put("mtime", .{ .integer = @intCast(stat.mtime) });
+        } else |_| {
+            try obj.put("size", .{ .integer = 0 });
+            try obj.put("mtime", .{ .integer = 0 });
+        }
+        
+        try sessions_array.append(.{ .object = obj });
+    }
+    
+    try sendResult(id, .{ .array = sessions_array });
+}
+
+fn protocolSearch(
+    allocator: std.mem.Allocator,
+    current_index: ?*InvertedIndex,
+    id: []const u8,
+    params: ?std.json.Value,
+) !void {
+    if (current_index == null) {
+        try sendError(id, "INDEX_REQUIRED", "Build index first");
+        return;
+    }
+    
+    const query = if (params) |p| blk: {
+        if (p.object.get("q")) |q| {
+            if (q == .string) break :blk q.string;
+        }
+        break :blk null;
+    } else null;
+    
+    if (query == null) {
+        try sendError(id, "INVALID_PARAMS", "Missing query");
+        return;
+    }
+    
+    const results = try current_index.?.search(query.?);
+    defer {
+        for (results) |r| allocator.free(r.snippet);
+        allocator.free(results);
+    }
+    
+    var results_array = std.ArrayList(std.json.Value).init(allocator);
+    defer results_array.deinit();
+    
+    for (results[0..@min(100, results.len)]) |r| {
+        var obj = std.StringArrayHashMap(std.json.Value).init(allocator);
+        
+        const id_str = try std.fmt.allocPrint(allocator, "{d}", .{r.conversation_id});
+        try obj.put("id", .{ .string = id_str });
+        try obj.put("score", .{ .float = r.score });
+        try obj.put("snippet", .{ .string = r.snippet });
+        try results_array.append(.{ .object = obj });
+    }
+    
+    try sendResult(id, .{ .array = results_array });
+}
+
+fn protocolExtract(
+    allocator: std.mem.Allocator,
+    fs: *FileSystem,
+    id: []const u8,
+    params: ?std.json.Value,
+) !void {
+    const session_id = if (params) |p| blk: {
+        if (p.object.get("session_id")) |s| {
+            if (s == .string) break :blk s.string;
+        }
+        break :blk null;
+    } else null;
+    
+    if (session_id == null) {
+        try sendError(id, "INVALID_PARAMS", "Missing session_id");
+        return;
+    }
+    
+    const format_str = if (params) |p| blk: {
+        if (p.object.get("format")) |f| {
+            if (f == .string) break :blk f.string;
+        }
+        break :blk "markdown";
+    } else "markdown";
+    
+    // Parse session_N to get index
+    if (!std.mem.startsWith(u8, session_id.?, "session_")) {
+        try sendError(id, "INVALID_SESSION", "Invalid session ID");
+        return;
+    }
+    
+    const index = std.fmt.parseInt(usize, session_id.?[8..], 10) catch {
+        try sendError(id, "INVALID_SESSION", "Invalid session number");
+        return;
+    };
+    
+    const sessions = try fs.findSessions(null);
+    defer {
+        for (sessions) |session| allocator.free(session);
+        allocator.free(sessions);
+    }
+    
+    if (index >= sessions.len) {
+        try sendError(id, "SESSION_NOT_FOUND", "Session not found");
+        return;
+    }
+    
+    var parser = try StreamingJSONLParser.init(allocator);
+    defer parser.deinit();
+    
+    const conversation = try parser.parseFile(sessions[index]);
+    defer {
+        allocator.free(conversation.id);
+        allocator.free(conversation.project_name);
+        allocator.free(conversation.file_path);
+        for (conversation.messages) |msg| {
+            allocator.free(msg.content);
+        }
+        allocator.free(conversation.messages);
+    }
+    
+    var export_mgr = ExportManager{
+        .allocator = allocator,
+        .output_dir = fs.output_dir,
+    };
+    
+    const format = std.meta.stringToEnum(ExportFormat, format_str) orelse .markdown;
+    const output_path = try export_mgr.generateFilename(&conversation, format);
+    defer allocator.free(output_path);
+    
+    switch (format) {
+        .markdown, .detailed_markdown => try export_mgr.exportMarkdown(&conversation, output_path),
+        .json => try export_mgr.exportJSON(&conversation, output_path),
+        .html => try export_mgr.exportHTML(&conversation, output_path),
+    }
+    
+    var result = std.StringArrayHashMap(std.json.Value).init(allocator);
+    try result.put("path", .{ .string = output_path });
+    try result.put("format", .{ .string = format_str });
+    try sendResult(id, .{ .object = result });
+}
+
+// ================================================================================
+// SECTION 7: Main Function
 // ================================================================================
 
 pub fn main() !void {
-    std.debug.print("Starting extractor...\n", .{});
-    
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     
-    std.debug.print("Initialized allocator...\n", .{});
-    std.debug.print("About to call CLI.run directly...\n", .{});
+    // Check if we have command-line arguments
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
     
-    try CLI.run(allocator);
+    // If we have args (other than program name), run CLI mode
+    // If no args and stdin is not a terminal (i.e., it's a pipe), run protocol mode
+    // Otherwise run CLI mode
     
-    std.debug.print("CLI.run completed successfully\n", .{});
+    if (args.len > 1) {
+        // CLI mode - user provided arguments
+        try CLI.run(allocator);
+    } else if (std.io.getStdIn().isTty()) {
+        // CLI mode - stdin is a terminal (interactive)
+        try CLI.run(allocator);
+    } else {
+        // Protocol mode - stdin is a pipe (Flutter calling us)
+        try runProtocolMode(allocator);
+    }
 }
 
 // ================================================================================
