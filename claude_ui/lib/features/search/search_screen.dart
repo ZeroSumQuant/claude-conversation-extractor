@@ -72,17 +72,29 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
       final coreClient = ref.read(zigCoreProvider.notifier);
       final result = await coreClient.request('search', {'q': query});
       
+      print('Search result: $result'); // Debug output
+      
       if (mounted) {
         setState(() {
-          _results = List<Map<String, dynamic>>.from(result['results'] ?? []);
+          // The result comes wrapped in a 'data' field from the Zig core
+          final data = result['data'] ?? result;
+          _results = List<Map<String, dynamic>>.from(data['results'] ?? []);
           _isSearching = false;
+          print('Results set: ${_results.length} items'); // Debug output
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = e.toString();
+          // Check if it's an INDEX_REQUIRED error
+          final errorStr = e.toString();
+          if (errorStr.contains('INDEX_REQUIRED')) {
+            _error = 'Please build the index first from the Home screen';
+          } else {
+            _error = errorStr;
+          }
           _isSearching = false;
+          _results = []; // Clear any previous results
         });
       }
     }
@@ -197,18 +209,19 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
   Widget _buildResultsArea(ThemeData theme) {
     if (_error != null) {
+      final isIndexError = _error!.contains('build the index');
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(
-              LucideIcons.alertCircle,
+              isIndexError ? LucideIcons.database : LucideIcons.alertCircle,
               size: 48,
-              color: theme.colorScheme.error,
+              color: isIndexError ? theme.colorScheme.primary : theme.colorScheme.error,
             ),
             const SizedBox(height: Tokens.space3),
             Text(
-              'Search Error',
+              isIndexError ? 'Index Required' : 'Search Error',
               style: theme.textTheme.titleLarge,
             ),
             const SizedBox(height: Tokens.space2),
@@ -219,6 +232,16 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
               ),
               textAlign: TextAlign.center,
             ),
+            if (isIndexError) ...[
+              const SizedBox(height: Tokens.space4),
+              FilledButton.icon(
+                onPressed: () {
+                  context.go('/');
+                },
+                icon: const Icon(LucideIcons.home, size: 18),
+                label: const Text('Go to Home'),
+              ),
+            ],
           ],
         ),
       );

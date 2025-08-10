@@ -2037,20 +2037,23 @@ const CompressedPostingList = struct {
     positions_compressed: [][]u8,
     
     pub fn decompress(self: *const CompressedPostingList, allocator: std.mem.Allocator) !PostingList {
-        // Decompress conversation IDs
-        const ids_as_i64 = try allocator.alloc(i64, self.conversation_ids_count);
-        defer allocator.free(ids_as_i64);
-        
-        // TODO: Implement Gorilla decompression
+        // Decompress conversation IDs (stored as raw u32 bytes for now)
         var ids = try allocator.alloc(u32, self.conversation_ids_count);
         for (0..self.conversation_ids_count) |i| {
-            ids[i] = @intCast(i); // Placeholder
+            const offset = i * 4;
+            ids[i] = std.mem.readInt(u32, self.conversation_ids_compressed[offset..][0..4], .little);
+        }
+        
+        // Decompress frequencies (stored as u64 for now)
+        var freqs = try allocator.alloc(u16, self.conversation_ids_count);
+        for (0..self.conversation_ids_count) |i| {
+            freqs[i] = @intCast(@min(65535, self.frequencies_compressed[i]));
         }
         
         return PostingList{
             .conversation_ids = ids,
-            .frequencies = &[_]u16{}, // TODO
-            .positions = &[_][]u32{}, // TODO
+            .frequencies = freqs,
+            .positions = &[_][]u32{}, // Empty positions for now
         };
     }
 };
@@ -2070,14 +2073,15 @@ const InvertedIndex = struct {
     cache_buffers: CacheAwareBufferChain, // Multi-level cache buffers
     
     pub fn build(allocator: std.mem.Allocator, conversations: []const *Conversation) !*InvertedIndex {
-        // Convert to SoA for better performance
-        var soa = try ConversationsSoA.init(allocator, conversations);
+        // Convert to SoA for better performance - allocate on heap
+        var soa_ptr = try allocator.create(ConversationsSoA);
+        soa_ptr.* = try ConversationsSoA.init(allocator, conversations);
         
         var index = try allocator.create(InvertedIndex);
         index.* = InvertedIndex{
             .allocator = allocator,
             .postings = std.StringHashMap(CompressedPostingList).init(allocator),
-            .conversations_soa = &soa,
+            .conversations_soa = soa_ptr,
             .total_conversations = conversations.len,
             .avg_conversation_length = 0,
             .cache_buffers = try CacheAwareBufferChain.init(allocator),
@@ -2085,14 +2089,14 @@ const InvertedIndex = struct {
         
         // Calculate average length using SIMD-friendly array
         var total_length: usize = 0;
-        for (soa.total_chars) |chars| {
+        for (soa_ptr.total_chars) |chars| {
             total_length += chars;
         }
         index.avg_conversation_length = @as(f32, @floatFromInt(total_length)) / @as(f32, @floatFromInt(conversations.len));
         
         // Build inverted index
         for (0..conversations.len) |conv_id| {
-            _ = soa.getMessagesForConversation(conv_id);
+            _ = soa_ptr.getMessagesForConversation(conv_id);
             
             // Build word positions map for this conversation
             var word_positions = std.StringHashMap(std.ArrayList(u32)).init(allocator);
@@ -2107,11 +2111,11 @@ const InvertedIndex = struct {
             
             // Process messages from the pool
             var position: u32 = 0;
-            var msg_offset = soa.message_offsets[conv_id];
-            const next_offset = if (conv_id + 1 < soa.ids.len) 
-                soa.message_offsets[conv_id + 1] 
+            var msg_offset = soa_ptr.message_offsets[conv_id];
+            const next_offset = if (conv_id + 1 < soa_ptr.ids.len) 
+                soa_ptr.message_offsets[conv_id + 1] 
             else 
-                @as(u32, @intCast(soa.message_pool.len));
+                @as(u32, @intCast(soa_ptr.message_pool.len));
             
             // Skip role bytes and tokenize content
             while (msg_offset < next_offset) {
@@ -2120,11 +2124,11 @@ const InvertedIndex = struct {
                 // Find end of current message (next role byte or end)
                 var msg_end = msg_offset;
                 while (msg_end < next_offset and msg_end + 1 < next_offset) {
-                    if (soa.message_pool[msg_end] <= 2) break; // Found next role byte
+                    if (soa_ptr.message_pool[msg_end] <= 2) break; // Found next role byte
                     msg_end += 1;
                 }
                 
-                const msg_content = soa.message_pool[msg_offset..msg_end];
+                const msg_content = soa_ptr.message_pool[msg_offset..msg_end];
                 
                 // Tokenize message content
                 var iter = std.mem.tokenizeAny(u8, msg_content, " \t\n.,!?;:()[]{}\"'");
@@ -2163,18 +2167,24 @@ const InvertedIndex = struct {
                 const key_copy = try allocator.dupe(u8, entry.key_ptr.*);
                 const posting = try index.postings.getOrPut(key_copy);
                 if (!posting.found_existing) {
+                    // Create new posting list with this conversation
+                    const conv_id_bytes = try allocator.alloc(u8, 4);
+                    std.mem.writeInt(u32, conv_id_bytes[0..4], @intCast(conv_id), .little);
+                    
+                    const freq_bytes = try allocator.alloc(u64, 1);
+                    freq_bytes[0] = @intCast(entry.value_ptr.items.len);
+                    
                     posting.value_ptr.* = CompressedPostingList{
-                        .conversation_ids_compressed = &[_]u8{},
-                        .conversation_ids_count = 0,
-                        .frequencies_compressed = &[_]u64{},
+                        .conversation_ids_compressed = conv_id_bytes,
+                        .conversation_ids_count = 1,
+                        .frequencies_compressed = freq_bytes,
                         .positions_compressed = &[_][]u8{},
                     };
                 } else {
                     // Free the duplicate if key already exists
                     allocator.free(key_copy);
+                    // TODO: Append to existing posting list (for now, just keeping first occurrence)
                 }
-                
-                // TODO: Accumulate and compress in batches
             }
         }
         
@@ -2296,6 +2306,8 @@ const InvertedIndex = struct {
         }
         self.postings.deinit();
         self.conversations_soa.deinit();
+        self.allocator.destroy(self.conversations_soa);  // Free the allocated pointer
+        self.cache_buffers.deinit();  // Also free cache buffers
     }
 };
 
@@ -2865,6 +2877,7 @@ fn protocolBuildIndex(
     try sendEvent(id, "complete", 1.0);
     
     var result = std.StringArrayHashMap(std.json.Value).init(allocator);
+    defer result.deinit();
     try result.put("status", .{ .string = "ok" });
     try result.put("conversations", .{ .integer = @intCast(conversations.items.len) });
     try sendResult(id, .{ .object = result });
@@ -2876,6 +2889,11 @@ fn protocolListSessions(
     id: []const u8,
     params: ?std.json.Value,
 ) !void {
+    // Use arena for all temporary allocations
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+    
     const root = if (params) |p| blk: {
         if (p == .object) {
             if (p.object.get("root")) |r| {
@@ -2891,13 +2909,12 @@ fn protocolListSessions(
         allocator.free(sessions);
     }
     
-    var sessions_array = std.ArrayList(std.json.Value).init(allocator);
-    defer sessions_array.deinit();
+    var sessions_array = std.ArrayList(std.json.Value).init(arena_alloc);
     
     for (sessions, 0..) |session, i| {
-        var obj = std.StringArrayHashMap(std.json.Value).init(allocator);
+        var obj = std.StringArrayHashMap(std.json.Value).init(arena_alloc);
         
-        const id_str = try std.fmt.allocPrint(allocator, "session_{d}", .{i});
+        const id_str = try std.fmt.allocPrint(arena_alloc, "session_{d}", .{i});
         try obj.put("id", .{ .string = id_str });
         try obj.put("path", .{ .string = session });
         try obj.put("name", .{ .string = std.fs.path.basename(session) });
@@ -2922,6 +2939,10 @@ fn protocolSearch(
     id: []const u8,
     params: ?std.json.Value,
 ) !void {
+    // Use arena for all temporary allocations
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
     if (current_index == null) {
         try sendError(id, "INDEX_REQUIRED", "Build index first");
         return;
@@ -2948,10 +2969,8 @@ fn protocolSearch(
     const results = current_index.?.search(query.?) catch |err| {
         std.debug.print("Search failed: {any}\n", .{err});
         // Return empty results on error
-        var empty_response = std.StringArrayHashMap(std.json.Value).init(allocator);
-        defer empty_response.deinit();
-        var empty_array = std.ArrayList(std.json.Value).init(allocator);
-        defer empty_array.deinit();
+        var empty_response = std.StringArrayHashMap(std.json.Value).init(arena_alloc);
+        const empty_array = std.ArrayList(std.json.Value).init(arena_alloc);
         try empty_response.put("results", .{ .array = empty_array });
         try sendResult(id, .{ .object = empty_response });
         return;
@@ -2961,13 +2980,12 @@ fn protocolSearch(
         allocator.free(results);
     }
     
-    var results_array = std.ArrayList(std.json.Value).init(allocator);
-    defer results_array.deinit();
+    var results_array = std.ArrayList(std.json.Value).init(arena_alloc);
     
     for (results[0..@min(100, results.len)]) |r| {
-        var obj = std.StringArrayHashMap(std.json.Value).init(allocator);
+        var obj = std.StringArrayHashMap(std.json.Value).init(arena_alloc);
         
-        const session_id_str = try std.fmt.allocPrint(allocator, "session_{d}", .{r.conversation_id});
+        const session_id_str = try std.fmt.allocPrint(arena_alloc, "session_{d}", .{r.conversation_id});
         try obj.put("session_id", .{ .string = session_id_str });
         try obj.put("session_name", .{ .string = session_id_str });
         try obj.put("score", .{ .float = r.score });
@@ -2977,8 +2995,7 @@ fn protocolSearch(
     }
     
     // Wrap in a results object as expected by Flutter
-    var response = std.StringArrayHashMap(std.json.Value).init(allocator);
-    defer response.deinit();
+    var response = std.StringArrayHashMap(std.json.Value).init(arena_alloc);
     try response.put("results", .{ .array = results_array });
     try sendResult(id, .{ .object = response });
 }
@@ -3064,6 +3081,7 @@ fn protocolExtract(
     }
     
     var result = std.StringArrayHashMap(std.json.Value).init(allocator);
+    defer result.deinit();
     try result.put("path", .{ .string = output_path });
     try result.put("format", .{ .string = format_str });
     try sendResult(id, .{ .object = result });

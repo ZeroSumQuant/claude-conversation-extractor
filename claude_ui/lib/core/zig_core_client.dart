@@ -264,12 +264,22 @@ class ZigCoreClient extends StateNotifier<CoreState> {
     _eventControllers[id]?.close();
     _eventControllers.remove(id);
 
-    state = state.copyWith(
-      status: CoreStatus.error,
-      error: errorMessage,
-      progress: 0,
-      progressStage: null,
-    );
+    // Only set global error state for critical errors, not request-specific ones
+    if (error.code != 'INDEX_REQUIRED' && error.code != 'INVALID_PARAMS') {
+      state = state.copyWith(
+        status: CoreStatus.error,
+        error: errorMessage,
+        progress: 0,
+        progressStage: null,
+      );
+    } else {
+      // For non-critical errors, just reset to ready
+      state = state.copyWith(
+        status: CoreStatus.ready,
+        progress: 0,
+        progressStage: null,
+      );
+    }
   }
 
   void _handleEvent(String id, Map<String, dynamic> data) {
