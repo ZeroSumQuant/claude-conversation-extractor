@@ -244,11 +244,95 @@ class ZigCoreClient extends StateNotifier<CoreState> {
   Future<void> _autoBuildIndex() async {
     try {
       _log('Auto-building index on startup...');
-      await buildIndex();
+      
+      // Create an animated indexing experience
+      state = state.copyWith(
+        status: CoreStatus.indexing,
+        progress: 0,
+        progressStage: 'scan',
+      );
+      
+      // Start the actual indexing
+      final indexFuture = buildIndex();
+      
+      // Animate through stages over 2.5 seconds minimum
+      final animationFuture = _animateIndexProgress();
+      
+      // Wait for both to complete
+      await Future.wait([indexFuture, animationFuture]);
+      
+      // Ensure we show 100% completion briefly
+      state = state.copyWith(
+        status: CoreStatus.indexing,
+        progress: 1.0,
+        progressStage: 'complete',
+      );
+      
+      await Future.delayed(const Duration(milliseconds: 300));
+      
+      // Reset to ready state
+      state = state.copyWith(
+        status: CoreStatus.ready,
+        progress: 0,
+        progressStage: null,
+      );
+      
     } catch (e) {
       _log('Auto-index failed (non-critical): $e');
-      // Don't block the app if auto-indexing fails
+      // Reset to ready state even on error
+      state = state.copyWith(
+        status: CoreStatus.ready,
+        progress: 0,
+        progressStage: null,
+      );
     }
+  }
+  
+  Future<void> _animateIndexProgress() async {
+    const totalDuration = Duration(milliseconds: 2500);
+    const steps = 50;
+    final stepDuration = Duration(milliseconds: totalDuration.inMilliseconds ~/ steps);
+    
+    final stages = [
+      (start: 0.0, end: 0.25, name: 'scan'),
+      (start: 0.25, end: 0.5, name: 'parse'),
+      (start: 0.5, end: 0.75, name: 'index'),
+      (start: 0.75, end: 0.95, name: 'complete'),
+    ];
+    
+    for (int i = 0; i <= steps; i++) {
+      if (state.status != CoreStatus.indexing) break;
+      
+      final progress = i / steps;
+      
+      // Determine current stage
+      String stageName = 'scan';
+      for (final stage in stages) {
+        if (progress >= stage.start && progress < stage.end) {
+          stageName = stage.name;
+          break;
+        }
+      }
+      
+      // Apply easing curve for smoother animation
+      final easedProgress = _easeInOutCubic(progress);
+      
+      // Only update if still indexing (in case real operation completed)
+      if (state.status == CoreStatus.indexing) {
+        state = state.copyWith(
+          progress: easedProgress * 0.95, // Cap at 95% until real completion
+          progressStage: stageName,
+        );
+      }
+      
+      await Future.delayed(stepDuration);
+    }
+  }
+  
+  double _easeInOutCubic(double t) {
+    return t < 0.5
+        ? 4 * t * t * t
+        : 1 - ((-2 * t + 2) * (-2 * t + 2) * (-2 * t + 2)) / 2;
   }
 
   void _handleResult(String id, Map<String, dynamic> data) {

@@ -56,18 +56,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               const SizedBox(height: Tokens.space7),
 
               // Status or progress
-              if (coreState.status == CoreStatus.indexing && _indexStream != null) ...[
-                StreamBuilder<CoreEvent>(
-                  stream: _indexStream,
-                  builder: (context, snapshot) {
-                    final event = snapshot.data;
-                    return ProgressCard(
-                      stage: event?.stage ?? 'Preparing...',
-                      progress: event?.progress ?? 0,
-                      message: event?.message,
-                      onCancel: _cancelIndexing,
-                    );
-                  },
+              if (coreState.status == CoreStatus.indexing) ...[
+                // Show progress for both auto-indexing and manual indexing
+                ProgressCard(
+                  stage: coreState.progressStage ?? 'Preparing...',
+                  progress: coreState.progress,
+                  message: _indexStream != null ? 'Building search index...' : 'Initializing search index...',
+                  onCancel: _indexStream != null ? _cancelIndexing : null,
                 ),
               ] else if (coreState.status == CoreStatus.ready) ...[
                 // Main actions

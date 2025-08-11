@@ -105,12 +105,15 @@ class ProgressCard extends StatelessWidget {
                 const SizedBox(height: Tokens.space2),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: progress,
-                    minHeight: 8,
-                    backgroundColor: theme.colorScheme.surfaceContainerHighest,
-                    valueColor: AlwaysStoppedAnimation<Color>(
-                      theme.colorScheme.primary,
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 300),
+                    child: LinearProgressIndicator(
+                      value: progress,
+                      minHeight: 8,
+                      backgroundColor: theme.colorScheme.surfaceContainerHighest,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        theme.colorScheme.primary,
+                      ),
                     ),
                   ),
                 ),
@@ -121,28 +124,33 @@ class ProgressCard extends StatelessWidget {
             const SizedBox(height: Tokens.space4),
             Row(
               children: [
-                _StageIndicator(
-                  label: 'Scan',
-                  isActive: stage.contains('scan'),
-                  isComplete: progress > 0.25,
+                Expanded(
+                  child: _StageIndicator(
+                    label: 'Scan',
+                    isActive: stage.contains('scan'),
+                    isComplete: progress > 0.25,
+                  ),
                 ),
-                const SizedBox(width: Tokens.space3),
-                _StageIndicator(
-                  label: 'Parse',
-                  isActive: stage.contains('parse'),
-                  isComplete: progress > 0.5,
+                Expanded(
+                  child: _StageIndicator(
+                    label: 'Parse',
+                    isActive: stage.contains('parse'),
+                    isComplete: progress > 0.5,
+                  ),
                 ),
-                const SizedBox(width: Tokens.space3),
-                _StageIndicator(
-                  label: 'Index',
-                  isActive: stage.contains('index'),
-                  isComplete: progress > 0.75,
+                Expanded(
+                  child: _StageIndicator(
+                    label: 'Index',
+                    isActive: stage.contains('index'),
+                    isComplete: progress > 0.75,
+                  ),
                 ),
-                const SizedBox(width: Tokens.space3),
-                _StageIndicator(
-                  label: 'Complete',
-                  isActive: stage.contains('complete'),
-                  isComplete: progress >= 1.0,
+                Expanded(
+                  child: _StageIndicator(
+                    label: 'Complete',
+                    isActive: stage.contains('complete'),
+                    isComplete: progress >= 0.95,
+                  ),
                 ),
               ],
             ),
@@ -188,24 +196,41 @@ class _StageIndicator extends StatelessWidget {
         ? theme.colorScheme.onSurface
         : theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5);
 
-    return Row(
+    return Column(
       children: [
         AnimatedContainer(
-          duration: Tokens.durationMedium,
-          width: 8,
-          height: 8,
+          duration: const Duration(milliseconds: 400),
+          curve: Curves.easeInOut,
+          width: isActive || isComplete ? 12 : 8,
+          height: isActive || isComplete ? 12 : 8,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: color,
+            boxShadow: isActive ? [
+              BoxShadow(
+                color: color.withValues(alpha: 0.4),
+                blurRadius: 8,
+                spreadRadius: 2,
+              ),
+            ] : null,
           ),
+          child: isComplete
+              ? Icon(
+                  Icons.check,
+                  size: 8,
+                  color: theme.colorScheme.onPrimary,
+                )
+              : null,
         ),
-        const SizedBox(width: Tokens.space2),
-        Text(
-          label,
+        const SizedBox(height: Tokens.space1),
+        AnimatedDefaultTextStyle(
+          duration: const Duration(milliseconds: 300),
           style: theme.textTheme.labelSmall?.copyWith(
             color: textColor,
-            fontWeight: isActive ? FontWeight.w500 : null,
-          ),
+            fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
+            fontSize: isActive ? 12 : 11,
+          ) ?? const TextStyle(),
+          child: Text(label),
         ),
       ],
     );
