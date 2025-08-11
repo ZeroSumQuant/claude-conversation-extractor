@@ -52,21 +52,29 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen>
       final coreClient = ref.read(zigCoreProvider.notifier);
       final result = await coreClient.request('list_sessions', null);
       
+      print('DEBUG: list_sessions raw result: $result');
+      
       if (mounted) {
         setState(() {
-          // Handle both array and object responses
-          if (result['data'] is List) {
-            _sessions = List<Map<String, dynamic>>.from(result['data']);
+          // Handle both direct array and wrapped data responses
+          final data = result['data'];
+          
+          // The backend returns the array directly in the 'data' field
+          if (data is List) {
+            _sessions = List<Map<String, dynamic>>.from(data);
             // Initialize session order
             _sessionOrder = _sessions.map((s) => s['id'] as String).toList();
+            print('DEBUG: Loaded ${_sessions.length} sessions with IDs: $_sessionOrder');
           } else {
             _sessions = [];
             _sessionOrder = [];
+            print('DEBUG: No sessions loaded - result data is not a List: ${data.runtimeType}');
           }
           _isLoading = false;
         });
       }
     } catch (e) {
+      print('DEBUG: Error loading sessions: $e');
       if (mounted) {
         setState(() {
           _sessions = [];
@@ -169,6 +177,11 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen>
       return;
     }
     
+    // Ensure sessions are loaded before searching
+    if (_sessions.isEmpty && !_isLoading) {
+      await _loadSessions();
+    }
+    
     setState(() => _isSearching = true);
     
     // Debounce search
@@ -179,6 +192,13 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen>
         
         final data = result['data'] ?? result;
         final results = data['results'] ?? [];
+        
+        // Debug: Log session IDs
+        print('DEBUG: Sessions loaded: ${_sessions.map((s) => s['id']).toList()}');
+        print('DEBUG: Search returned ${results.length} results');
+        for (final r in results) {
+          print('DEBUG: Search result session_id: ${r['session_id']}');
+        }
         
         if (mounted) {
           setState(() {
@@ -192,9 +212,13 @@ class _SessionsScreenState extends ConsumerState<SessionsScreen>
             _isSearching = false;
             // Trigger animation for reordering
             _animationController.forward(from: 0);
+            
+            print('DEBUG: _searchResults keys: ${_searchResults.keys.toList()}');
+            print('DEBUG: Matching sessions: ${_sessions.where((s) => _searchResults.containsKey(s['id'])).length}');
           });
         }
       } catch (e) {
+        print('DEBUG: Search error: $e');
         // If search fails (e.g., index not built), fall back to name filtering
         if (mounted) {
           setState(() {
