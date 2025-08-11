@@ -1390,6 +1390,26 @@ const StreamingJSONLParser = struct {
             }
         }
         
+        // Handle trailing buffer if file doesn't end with newline
+        if (line_buffer.items.len > 0) {
+            _ = self.line_arena.reset(.retain_capacity);
+            if (std.json.parseFromSlice(std.json.Value, self.line_arena.allocator(), line_buffer.items, .{})) |parsed| {
+                defer parsed.deinit();
+                if (try self.extractMessage(parsed.value)) |message| {
+                    if (message.content.len > 0) {
+                        total_chars += message.content.len;
+                        switch (message.role) {
+                            .user => user_count += 1,
+                            .assistant => assistant_count += 1,
+                            .system => {},
+                        }
+                        try messages.append(message);
+                    }
+                }
+            } else |_| {}
+            line_buffer.clearRetainingCapacity();
+        }
+        
         const project_name = try self.extractProjectName(file_path);
         const messages_slice = try messages.toOwnedSlice();
         
@@ -1410,9 +1430,9 @@ const StreamingJSONLParser = struct {
     
     pub fn parseFile(self: *StreamingJSONLParser, file_path: []const u8) !Conversation {
         const stderr = std.io.getStdErr().writer();
-        try stderr.print("PARSER: Starting to parse file: {s}\n", .{std.fs.path.basename(file_path)});
+        try stderr.print("DEBUG: Parsing file: {s}\n", .{std.fs.path.basename(file_path)});
         const result = try self.parseFileStreaming(file_path);
-        try stderr.print("PARSER: Finished parsing {s} - id: {s}, messages: {d}, chars: {d}\n", .{
+        try stderr.print("DEBUG: Parsed {s} -> ID: {s}, Messages: {d}, Chars: {d}\n", .{
             std.fs.path.basename(file_path), result.id, result.message_count, result.total_chars
         });
         return result;
@@ -1523,91 +1543,83 @@ const StreamingJSONLParser = struct {
     
     fn extractMessage(self: *StreamingJSONLParser, value: std.json.Value) !?Message {
         if (value != .object) return null;
-        
         const obj = value.object;
-        
-        // Check if this is a message entry
-        const entry_type = obj.get("type") orelse return null;
-        if (entry_type != .string) return null;
-        
-        const type_str = entry_type.string;
-        if (!std.mem.eql(u8, type_str, "user") and !std.mem.eql(u8, type_str, "assistant")) {
-            return null;
-        }
-        
-        // Get the message object
-        const msg_obj = obj.get("message") orelse return null;
-        if (msg_obj != .object) return null;
-        
-        // Extract role
-        var role: Role = .user;
-        if (msg_obj.object.get("role")) |role_val| {
-            if (role_val == .string) {
-                if (std.mem.eql(u8, role_val.string, "user")) {
-                    role = .user;
-                } else if (std.mem.eql(u8, role_val.string, "assistant")) {
-                    role = .assistant;
-                } else if (std.mem.eql(u8, role_val.string, "system")) {
-                    role = .system;
-                }
-            }
-        }
-        
-        // Extract content
-        var content_builder = std.ArrayList(u8).init(self.allocator);
-        errdefer content_builder.deinit();
-        
-        if (msg_obj.object.get("content")) |content_val| {
-            try self.extractContent(content_val, &content_builder);
-        }
-        
-        // Extract timestamp if available
-        var timestamp: ?i64 = null;
-        if (obj.get("created_at")) |ts| {
-            if (ts == .integer) {
-                timestamp = ts.integer;
-            }
-        }
-        
-        // Extract tool calls and responses if present
-        var tool_calls: ?[]ToolCall = null;
-        const tool_responses: ?[]ToolResponse = null;
-        
-        // Look for tool_calls in the message
-        if (msg_obj.object.get("tool_calls")) |tools| {
-            if (tools == .array) {
-                var calls = std.ArrayList(ToolCall).init(self.allocator);
-                for (tools.array.items) |tool| {
-                    if (tool == .object) {
-                        const tool_name = if (tool.object.get("name")) |n|
-                            if (n == .string) try self.allocator.dupe(u8, n.string) else "unknown"
-                        else "unknown";
-                        
-                        const params = if (tool.object.get("parameters")) |p|
-                            try std.json.stringifyAlloc(self.allocator, p, .{})
-                        else try self.allocator.dupe(u8, "{}");
-                        
-                        try calls.append(.{
-                            .tool_name = tool_name,
-                            .parameters = params,
-                            .result = null,
-                        });
+
+        var role_opt: ?Role = null;
+        var content_val_opt: ?std.json.Value = null;
+
+        // Path A: type=user/assistant + message{role,content}
+        if (obj.get("type")) |t| {
+            if (t == .string) {
+                if (std.mem.eql(u8, t.string, "user") or std.mem.eql(u8, t.string, "assistant")) {
+                    if (obj.get("message")) |m| {
+                        if (m == .object) {
+                            if (m.object.get("role")) |r| {
+                                if (r == .string) {
+                                    role_opt = if (std.mem.eql(u8, r.string, "user")) .user
+                                               else if (std.mem.eql(u8, r.string, "assistant")) .assistant
+                                               else .system;
+                                }
+                            }
+                            if (m.object.get("content")) |c| content_val_opt = c;
+                        }
                     }
                 }
-                if (calls.items.len > 0) {
-                    tool_calls = try calls.toOwnedSlice();
+            }
+        }
+
+        // Path B: message{role,content} regardless of top-level type
+        if (role_opt == null or content_val_opt == null) {
+            if (obj.get("message")) |m| {
+                if (m == .object) {
+                    if (m.object.get("role")) |r| {
+                        if (r == .string) {
+                            role_opt = if (std.mem.eql(u8, r.string, "user")) .user
+                                       else if (std.mem.eql(u8, r.string, "assistant")) .assistant
+                                       else .system;
+                        }
+                    }
+                    if (m.object.get("content")) |c| content_val_opt = c;
                 }
             }
         }
-        
+
+        // Path C: role/content at top level
+        if (role_opt == null or content_val_opt == null) {
+            if (obj.get("role")) |r| {
+                if (r == .string) {
+                    role_opt = if (std.mem.eql(u8, r.string, "user")) .user
+                               else if (std.mem.eql(u8, r.string, "assistant")) .assistant
+                               else .system;
+                }
+            }
+            if (obj.get("content")) |c| content_val_opt = c;
+        }
+
+        if (role_opt == null or content_val_opt == null) return null;
+
+        var content_builder = std.ArrayList(u8).init(self.allocator);
+        errdefer content_builder.deinit();
+        try self.extractContent(content_val_opt.?, &content_builder);
+
         const content_str = try content_builder.toOwnedSlice();
-        
+
+        // Timestamp still optional:
+        var timestamp: ?i64 = null;
+        if (obj.get("created_at")) |ts| {
+            switch (ts) {
+                .integer => timestamp = ts.integer,
+                .float => timestamp = @intFromFloat(ts.float),
+                else => {},
+            }
+        }
+
         return Message{
-            .role = role,
+            .role = role_opt.?,
             .content = content_str,
             .timestamp = timestamp,
-            .tool_calls = tool_calls,
-            .tool_responses = tool_responses,
+            .tool_calls = null,
+            .tool_responses = null,
         };
     }
     
@@ -4184,9 +4196,6 @@ fn protocolBuildIndex(
         }
         
         // Parse for old index (temporary)
-        var parser = try StreamingJSONLParser.init(allocator);
-        defer parser.deinit();
-        
         // Keep track of which conversation index maps to which session
         var conv_to_session_map = std.ArrayList(u32).init(allocator);
         // NO defer here - we're transferring ownership below
@@ -4195,8 +4204,9 @@ fn protocolBuildIndex(
         // The conversation array only contains successfully parsed files
         // But we need to know which session (file) each conversation came from
         for (sessions, 0..) |session, session_idx| {
-            // Reset parser for each file to avoid arena pollution
-            parser.reset();
+            // Create a new parser for each file to avoid state pollution
+            var parser = try StreamingJSONLParser.init(allocator);
+            defer parser.deinit();
             
             if (parser.parseFile(session)) |conv| {
                 const conv_ptr = try allocator.create(Conversation);
@@ -4432,14 +4442,15 @@ fn protocolSearch(
         }
     }.lessThan);
     
-    // Put sorted results back
+    // Create new array with sorted results (don't append to the old array)
+    var sorted_results = std.ArrayList(std.json.Value).init(arena_alloc);
     for (results_slice) |item| {
-        try results_array.append(item);
+        try sorted_results.append(item);
     }
     
     // Wrap in a results object as expected by Flutter
     var response = std.StringArrayHashMap(std.json.Value).init(arena_alloc);
-    try response.put("results", .{ .array = results_array });
+    try response.put("results", .{ .array = sorted_results });
     try sendResult(id, .{ .object = response });
 }
 
