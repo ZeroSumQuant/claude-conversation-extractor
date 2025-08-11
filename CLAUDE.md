@@ -1,23 +1,66 @@
 # Claude Conversation Extractor - Project Context
 
-## 🚀 HIGH-PERFORMANCE EXTRACTOR - CURRENT PRODUCTION VERSION
+## 🚀 PRODUCTION EXTRACTOR - FULLY WORKING VERSION
 
-**Last Updated**: August 11, 2025 at 1:08 PM EDT
+**Last Updated**: August 11, 2025 at 6:03 PM EDT
 
-### CURRENT PRODUCTION EXTRACTOR (HIGH-PERFORMANCE VERSION)
-- **File**: `zig-out/bin/extractor`
-- **Size**: 2.4M (2,516,992 bytes)
-- **Date**: Aug 11 12:46
-- **Version**: 2.0.0 (high-performance database version)
-- **SHA256**: `5b323bd1a184be0329f8cb4526d9a868d4b984c1412dcbcfb79ebe3cabfd1a5a`
-- **Deployed to app**: Aug 11 13:08 EDT
+### WORKING PRODUCTION EXTRACTOR ✅
+- **File**: `zig-out/bin/extractor` and `extractor` (root)
+- **Size**: 504KB (516,096 bytes)
+- **Date**: Aug 11 15:02 EDT
+- **Version**: 2.0.0 (SQLite-only with protocol mode)
+- **SHA256**: `4c7d3e0d525f081db2017e902b9267afd915752906e709352493a30642134e62`
+- **Backup**: `~/Desktop/extractor_working_aug11_v2.0.0_504KB`
+- **Deployed to app**: Aug 11 15:02 EDT
+- **Git Commit**: `f73dcad` on branch `fix-message-display-issue`
 
-### Performance Metrics (PRODUCTION VERSION)
-- **Search Speed**: ~1.5ms (7,000x faster than old version!)
-- **Extract Speed**: 36ms total (100x faster than old version!)
-- **Large file (530MB)**: Loads in 21ms (was 1,360ms)
-- **Small file (2KB)**: Loads in 0.21ms (was ~100ms)
-- **Database**: 49,378 messages indexed from 30 conversations
+### THIS IS THE ONE VERSION
+**NO MULTIPLE VERSIONS** - This is the single, unified implementation
+
+### 🚨 BREAK GLASS - Version Verification & Recovery
+
+#### Quick Verification
+Run `./VERIFY_WORKING_EXTRACTOR.sh` to check if you have the correct version.
+
+#### Emergency Restore Methods
+1. **From Desktop Backup** (Fastest):
+   ```bash
+   cp ~/Desktop/extractor_working_aug11_v2.0.0_504KB extractor
+   cp ~/Desktop/extractor_working_aug11_v2.0.0_504KB zig-out/bin/extractor
+   cp ~/Desktop/extractor_working_aug11_v2.0.0_504KB claude_ui/macos/extractor
+   ```
+
+2. **From Git**:
+   ```bash
+   git checkout f73dcad -- extractor.zig
+   zig build -Doptimize=ReleaseFast
+   ```
+
+3. **From TAR Backup**:
+   ```bash
+   cd ~/Desktop
+   tar -xzf COMPLETE_WORKING_PROJECT_*.tar.gz
+   ```
+
+#### Red Flags - WRONG Versions
+- Binary size is 2.4MB or larger
+- Binary size is exactly 573KB
+- SHA256 starts with "5b323bd..." (old version)
+- Error: "cannot rollback - no transaction is active"
+- Search returns IDs like "093fc10c-b732..." instead of "session_12"
+- Messages show "0 messages" when clicking sessions
+
+See `EMERGENCY_RESTORE_INSTRUCTIONS.md` for complete details.
+
+### What's Working in This Version
+- ✅ **Messages display correctly** when clicking session cards
+- ✅ **Search works perfectly** - returns proper session_N format
+- ✅ **Snippets highlight** in search results
+- ✅ **No transaction errors** - fixed rollback issue
+- ✅ **Protocol mode** for Flutter UI communication
+- ✅ **Database**: 49,380 messages indexed from 30 conversations
+- ✅ **CLI search**: Works independently
+- ✅ **Export formats**: Markdown, JSON, HTML all working
 
 ### What This Version Includes
 - ✅ **Full SQLite database integration** - All messages stored in database

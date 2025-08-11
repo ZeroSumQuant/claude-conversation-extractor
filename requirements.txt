@@ -1,3 +1,0 @@
-# No external dependencies required!
-# This tool uses only Python standard library modules.
-# Python 3.8+ is required.
