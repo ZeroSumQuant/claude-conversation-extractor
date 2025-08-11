@@ -3225,11 +3225,13 @@ const InvertedIndex = struct {
         
         // Build inverted index
         std.debug.print("Building inverted index for {d} conversations\n", .{conversations.len});
+        var indexed_count: usize = 0;
         for (0..conversations.len) |conv_id| {
             const messages = soa_ptr.getMessagesForConversation(conv_id);
             std.debug.print("  Indexing conversation {d}: {d} bytes of messages\n", .{
                 conv_id, messages.len
             });
+            indexed_count += 1;
             
             // Build word positions map for this conversation
             var word_positions = std.StringHashMap(std.ArrayList(u32)).init(allocator);
@@ -3244,28 +3246,42 @@ const InvertedIndex = struct {
             
             // Process messages from the pool
             var position: u32 = 0;
-            var msg_offset = soa_ptr.message_offsets[conv_id];
+            const msg_offset = soa_ptr.message_offsets[conv_id];
             const next_offset = if (conv_id + 1 < soa_ptr.ids.len) 
                 soa_ptr.message_offsets[conv_id + 1] 
             else 
                 @as(u32, @intCast(soa_ptr.message_pool.len));
             
-            // Skip role bytes and tokenize content
-            while (msg_offset < next_offset) {
-                msg_offset += 1; // Skip role byte
+            // Process each message in the conversation
+            // The message pool format is: [role][content][role][content]...
+            var current_offset = msg_offset;
+            var message_index: usize = 0;
+            
+            while (current_offset < next_offset and message_index < soa_ptr.message_lengths[conv_id]) {
+                // Skip the role byte
+                if (current_offset < next_offset) {
+                    current_offset += 1; // Skip role byte
+                }
                 
-                // Find end of current message (next role byte or end)
-                var msg_end = msg_offset;
-                while (msg_end < next_offset and msg_end + 1 < next_offset) {
-                    if (soa_ptr.message_pool[msg_end] <= 2) break; // Found next role byte
+                if (current_offset >= next_offset) break;
+                
+                // Find the end of this message (next role byte or end of this conversation's data)
+                var msg_end = current_offset;
+                while (msg_end < next_offset) {
+                    // Check if we've hit another role byte (0, 1, or 2)
+                    if (msg_end < next_offset and soa_ptr.message_pool[msg_end] <= 2) {
+                        break; // Found next message boundary
+                    }
                     msg_end += 1;
                 }
                 
-                const msg_content = soa_ptr.message_pool[msg_offset..msg_end];
-                
-                // Tokenize message content
-                var iter = std.mem.tokenizeAny(u8, msg_content, " \t\n.,!?;:()[]{}\"'");
-                while (iter.next()) |word| {
+                // Extract message content
+                if (msg_end > current_offset) {
+                    const msg_content = soa_ptr.message_pool[current_offset..msg_end];
+                    
+                    // Tokenize message content
+                    var iter = std.mem.tokenizeAny(u8, msg_content, " \t\n.,!?;:()[]{}\"'");
+                    while (iter.next()) |word| {
                     // Skip very short words or very long words (likely data/noise)
                     if (word.len < 2 or word.len > 100) continue;
                     
@@ -3286,9 +3302,12 @@ const InvertedIndex = struct {
                     }
                     try entry.value_ptr.append(position);
                     position += 1;
+                    }
                 }
                 
-                msg_offset = msg_end;
+                // Move to next message
+                current_offset = msg_end;
+                message_index += 1;
             }
             
             // Collect posting data for compression later
@@ -3356,6 +3375,18 @@ const InvertedIndex = struct {
                         };
                     }
                 }
+            }
+        }
+        
+        std.debug.print("INDEXED {d} conversations total\n", .{indexed_count});
+        
+        // Debug: Check a sample word
+        if (index.postings.get("the")) |posting| {
+            std.debug.print("DEBUG: Word 'the' found in {d} conversations\n", .{posting.conversation_ids_count});
+            for (0..@min(5, posting.conversation_ids_count)) |i| {
+                const offset = i * 4;
+                const conv_id = std.mem.readInt(u32, posting.conversation_ids_compressed[offset..][0..4], .little);
+                std.debug.print("  Conv ID: {d}\n", .{conv_id});
             }
         }
         
@@ -4221,7 +4252,7 @@ fn protocolBuildIndex(
         
         // Transfer ownership of the buffer to a slice (no copy, no double-free)
         const session_id_list = try conv_to_session_map.toOwnedSlice();
-        defer allocator.free(session_id_list); // Free it when we're done
+        // Don't free this - InvertedIndex takes ownership!
         
         // Sanity check: mapping should have exactly as many entries as conversations
         std.debug.assert(conversations.items.len == session_id_list.len);

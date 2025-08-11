@@ -1,5 +1,5 @@
 0
-183264 18253482 1754869816188788649 ccfff512f55588f4b8b70a88aa40d650 0 /Users/dustinkirby/Documents/GitHub/claude-conversation-extractor/extractor.zig
+189683 18319593 1754879553641897205 505e33f780d2d6d093b956706f783949 0 /Users/dustinkirby/Documents/GitHub/claude-conversation-extractor/extractor.zig
 22406 16662132 1747974701000000000 1663b1f256f19a39eb5e6bfd615690e3 1 ubsan_rt.zig
 12143 7093557 1745032244000000000 0e6eb59642622df83b3423583b0094b2 0 /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk/usr/lib/libsqlite3.tbd
 10635 16646913 1747974701000000000 11c597f66dba45479b90c4338ebdbe98 1 compiler_rt.zig
