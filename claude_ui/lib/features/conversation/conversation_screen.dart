@@ -8,10 +8,14 @@ import '../../core/zig_core_client.dart';
 
 class ConversationScreen extends ConsumerStatefulWidget {
   final String sessionId;
+  final String? highlightQuery;
+  final int? jumpToPosition;
   
   const ConversationScreen({
     super.key, 
     required this.sessionId,
+    this.highlightQuery,
+    this.jumpToPosition,
   });
 
   @override
@@ -20,14 +24,45 @@ class ConversationScreen extends ConsumerStatefulWidget {
 
 class _ConversationScreenState extends ConsumerState<ConversationScreen> {
   Map<String, dynamic>? _conversation;
+  List<Map<String, dynamic>> _messages = [];
   bool _isLoading = true;
+  bool _isLoadingMore = false;
+  bool _hasMore = true;
   String? _error;
+  int _currentOffset = 0;
+  static const int _pageSize = 50;
   final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
-    _loadConversation();
+    // Load initial messages immediately for instant display
+    _loadInitialMessages().then((_) {
+      // After messages load, jump to position if specified
+      if (widget.jumpToPosition != null && _messages.isNotEmpty) {
+        _jumpToMessage(widget.jumpToPosition!);
+      }
+    });
+  }
+  
+  void _jumpToMessage(int position) {
+    // Find the message at the given position
+    if (position < _messages.length) {
+      // Calculate scroll position (approximate)
+      // Each message is roughly 100-200 pixels
+      final scrollPosition = position * 150.0;
+      
+      // Delay to ensure layout is complete
+      Future.delayed(const Duration(milliseconds: 300), () {
+        if (_scrollController.hasClients) {
+          _scrollController.animateTo(
+            scrollPosition,
+            duration: const Duration(milliseconds: 500),
+            curve: Curves.easeOutCubic,
+          );
+        }
+      });
+    }
   }
 
   @override
@@ -36,7 +71,7 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
     super.dispose();
   }
 
-  Future<void> _loadConversation() async {
+  Future<void> _loadInitialMessages() async {
     setState(() {
       _isLoading = true;
       _error = null;
@@ -45,23 +80,30 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
     try {
       final coreClient = ref.read(zigCoreProvider.notifier);
       
-      // Extract the conversation using the session ID
+      // Load first page of messages (ChatGPT style - instant display)
       final result = await coreClient.request('extract', {
         'session_id': widget.sessionId,
         'format': 'json',
+        'limit': _pageSize,
+        'offset': 0,
       });
       
-      print('Loaded conversation: $result'); // Debug
-      
       if (mounted) {
+        final data = result['data'] ?? result;
         setState(() {
-          _conversation = result;
+          _conversation = data;
+          _messages = List<Map<String, dynamic>>.from(data['messages'] ?? []);
+          _hasMore = data['has_more'] ?? false;
+          _currentOffset = _messages.length;
           _isLoading = false;
         });
         
-        // Scroll to bottom after loading
+        // Setup scroll listener for infinite scrolling
+        _scrollController.addListener(_onScroll);
+        
+        // Scroll to bottom after initial load
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_scrollController.hasClients) {
+          if (_scrollController.hasClients && _messages.isNotEmpty) {
             _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
           }
         });
@@ -75,6 +117,51 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
       }
     }
   }
+  
+  void _onScroll() {
+    // Load more when scrolled to top (older messages)
+    if (_scrollController.position.pixels == 0 && 
+        !_isLoadingMore && 
+        _hasMore) {
+      _loadMoreMessages();
+    }
+  }
+  
+  Future<void> _loadMoreMessages() async {
+    setState(() {
+      _isLoadingMore = true;
+    });
+    
+    try {
+      final coreClient = ref.read(zigCoreProvider.notifier);
+      
+      final result = await coreClient.request('extract', {
+        'session_id': widget.sessionId,
+        'format': 'json',
+        'limit': _pageSize,
+        'offset': _currentOffset,
+      });
+      
+      if (mounted) {
+        final data = result['data'] ?? result;
+        final newMessages = List<Map<String, dynamic>>.from(data['messages'] ?? []);
+        
+        setState(() {
+          // Prepend older messages to the beginning
+          _messages = [...newMessages, ..._messages];
+          _hasMore = data['has_more'] ?? false;
+          _currentOffset += newMessages.length;
+          _isLoadingMore = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoadingMore = false;
+        });
+      }
+    }
+  }
 
   Future<void> _exportConversation(String format) async {
     try {
@@ -82,12 +169,13 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
       final result = await coreClient.request('extract', {
         'session_id': widget.sessionId,
         'format': format,
+        'export': true,  // Tell backend we want to export to file
       });
       
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Exported to ${result['path'] ?? 'downloads'}'),
+            content: Text('Exported to ~/Desktop/Claude logs/'),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -134,7 +222,7 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
                     // Back button
                     IconButton(
                       icon: const Icon(LucideIcons.arrowLeft),
-                      onPressed: () => context.go('/sessions'),
+                      onPressed: () => context.pop(),
                       tooltip: 'Back to Sessions',
                     ),
                     const SizedBox(width: Tokens.space2),
@@ -217,7 +305,7 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
               ),
               const SizedBox(height: Tokens.space4),
               FilledButton.icon(
-                onPressed: _loadConversation,
+                onPressed: _loadInitialMessages,
                 icon: const Icon(LucideIcons.refreshCw, size: 18),
                 label: const Text('Retry'),
               ),
@@ -252,41 +340,104 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
       );
     }
 
-    // ChatGPT-style message display
+    // ChatGPT-style message display with infinite scroll
     return Container(
       color: theme.brightness == Brightness.light 
           ? Colors.grey.shade50 
           : theme.colorScheme.surfaceContainerLowest,
-      child: ListView.builder(
-        controller: _scrollController,
-        padding: const EdgeInsets.symmetric(vertical: Tokens.space4),
-        itemCount: messages.length,
-        itemBuilder: (context, index) {
-          final message = messages[index];
-          return _MessageBubble(message: message);
-        },
+      child: Column(
+        children: [
+          // Show loading indicator at top when loading older messages
+          if (_isLoadingMore)
+            Container(
+              padding: const EdgeInsets.all(Tokens.space3),
+              child: const CircularProgressIndicator(strokeWidth: 2),
+            ),
+          // Messages list
+          Expanded(
+            child: ListView.builder(
+              controller: _scrollController,
+              padding: const EdgeInsets.symmetric(vertical: Tokens.space4),
+              itemCount: messages.length,
+              itemBuilder: (context, index) {
+                final message = messages[index];
+                return _MessageBubble(
+                  message: message,
+                  highlightQuery: widget.highlightQuery,
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }
 
   List<Map<String, dynamic>> _extractMessages() {
-    if (_conversation == null) return [];
-    
-    // Try to extract messages from the conversation data
-    // The exact structure depends on what the Zig backend returns
-    if (_conversation!['messages'] is List) {
-      return List<Map<String, dynamic>>.from(_conversation!['messages']);
-    }
-    
-    // If no messages field, return empty
-    return [];
+    // Use the already loaded messages list
+    return _messages;
   }
 }
 
 class _MessageBubble extends StatelessWidget {
   final Map<String, dynamic> message;
+  final String? highlightQuery;
   
-  const _MessageBubble({required this.message});
+  const _MessageBubble({
+    required this.message,
+    this.highlightQuery,
+  });
+  
+  Widget _buildHighlightedContent(String content, ThemeData theme) {
+    if (highlightQuery == null || highlightQuery!.isEmpty) {
+      return SelectableText(
+        content,
+        style: theme.textTheme.bodyMedium?.copyWith(height: 1.5),
+      );
+    }
+    
+    final lowerContent = content.toLowerCase();
+    final lowerQuery = highlightQuery!.toLowerCase();
+    final matches = <TextSpan>[];
+    
+    int lastEnd = 0;
+    int index = lowerContent.indexOf(lowerQuery);
+    
+    while (index != -1 && lastEnd < content.length) {
+      // Add text before match
+      if (index > lastEnd) {
+        matches.add(TextSpan(
+          text: content.substring(lastEnd, index),
+          style: theme.textTheme.bodyMedium?.copyWith(height: 1.5),
+        ));
+      }
+      
+      // Add highlighted match
+      matches.add(TextSpan(
+        text: content.substring(index, index + highlightQuery!.length),
+        style: theme.textTheme.bodyMedium?.copyWith(
+          height: 1.5,
+          backgroundColor: theme.colorScheme.tertiary.withValues(alpha: 0.3),
+          fontWeight: FontWeight.w600,
+        ),
+      ));
+      
+      lastEnd = index + highlightQuery!.length;
+      index = lowerContent.indexOf(lowerQuery, lastEnd);
+    }
+    
+    // Add remaining text
+    if (lastEnd < content.length) {
+      matches.add(TextSpan(
+        text: content.substring(lastEnd),
+        style: theme.textTheme.bodyMedium?.copyWith(height: 1.5),
+      ));
+    }
+    
+    return SelectableText.rich(
+      TextSpan(children: matches),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -347,12 +498,7 @@ class _MessageBubble extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: Tokens.space1),
-                  SelectableText(
-                    content,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      height: 1.5,
-                    ),
-                  ),
+                  _buildHighlightedContent(content, theme),
                 ],
               ),
             ),

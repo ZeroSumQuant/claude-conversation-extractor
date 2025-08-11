@@ -191,6 +191,16 @@ class ZigCoreClient extends StateNotifier<CoreState> {
     if (line.trim().isEmpty) return;
 
     try {
+      // Debug: log line length for all results
+      if (line.contains('"type":"result"')) {
+        _log('Result line length: ${line.length} chars');
+        // Check if it's a search result by looking for session_id
+        if (line.contains('"session_id"')) {
+          final resultCount = '"session_id"'.allMatches(line).length;
+          _log('Number of session_id occurrences: $resultCount');
+        }
+      }
+      
       final json = jsonDecode(line) as Map<String, dynamic>;
       final message = ProtocolMessage.fromJson(json);
 
@@ -226,6 +236,19 @@ class ZigCoreClient extends StateNotifier<CoreState> {
       version: version,
       error: null,
     );
+    
+    // Automatically build index on startup
+    _autoBuildIndex();
+  }
+  
+  Future<void> _autoBuildIndex() async {
+    try {
+      _log('Auto-building index on startup...');
+      await buildIndex();
+    } catch (e) {
+      _log('Auto-index failed (non-critical): $e');
+      // Don't block the app if auto-indexing fails
+    }
   }
 
   void _handleResult(String id, Map<String, dynamic> data) {
@@ -436,6 +459,10 @@ class ZigCoreClient extends StateNotifier<CoreState> {
 
   Future<void> cancel() async {
     await request('cancel', null);
+  }
+
+  Future<Map<String, dynamic>> buildIndex() async {
+    return await request('build_index', null);
   }
 
   @override

@@ -70,7 +70,1080 @@ const ExportFormat = enum {
 };
 
 // ================================================================================
-// SECTION 2: File System Operations (Port of find_sessions)
+// SECTION 2: Memory-Mapped Files and Block Index (.bix)
+// ================================================================================
+
+const builtin = @import("builtin");
+const os = std.os;
+const windows = if (builtin.os.tag == .windows) std.os.windows else void;
+
+// Platform-agnostic memory mapped file abstraction
+pub const MappedFile = struct {
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    data: []const u8,
+    generation: u64,
+    
+    // Platform-specific handles
+    file_handle: if (builtin.os.tag == .windows) windows.HANDLE else std.fs.File,
+    map_handle: if (builtin.os.tag == .windows) windows.HANDLE else void,
+    
+    // File metadata for change detection
+    size: u64,
+    mtime_ns: i128,
+    device_id: u64,
+    inode: u64,
+    
+    const Self = @This();
+    
+    pub fn open(allocator: std.mem.Allocator, path: []const u8) !Self {
+        if (builtin.os.tag == .windows) {
+            return openWindows(allocator, path);
+        } else {
+            return openPosix(allocator, path);
+        }
+    }
+    
+    fn openPosix(allocator: std.mem.Allocator, path: []const u8) !Self {
+        const file = try std.fs.openFileAbsolute(path, .{ .mode = .read_only });
+        errdefer file.close();
+        
+        const stat = try file.stat();
+        
+        // Map the file
+        const data = try std.posix.mmap(
+            null,
+            stat.size,
+            std.posix.PROT.READ,
+            .{ .TYPE = .PRIVATE },
+            file.handle,
+            0,
+        );
+        
+        return Self{
+            .allocator = allocator,
+            .path = try allocator.dupe(u8, path),
+            .data = data,
+            .generation = 0,
+            .file_handle = file,
+            .map_handle = {},
+            .size = stat.size,
+            .mtime_ns = stat.mtime,
+            .device_id = 0, // Not available in cross-platform stat
+            .inode = @intCast(stat.inode),
+        };
+    }
+    
+    fn openWindows(allocator: std.mem.Allocator, path: []const u8) !Self {
+        const path_w = try std.unicode.utf8ToUtf16LeAllocZ(allocator, path);
+        defer allocator.free(path_w);
+        
+        // Open with sharing flags to allow concurrent access
+        const file_handle = windows.kernel32.CreateFileW(
+            path_w,
+            windows.GENERIC_READ,
+            windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE | windows.FILE_SHARE_DELETE,
+            null,
+            windows.OPEN_EXISTING,
+            windows.FILE_ATTRIBUTE_NORMAL,
+            null,
+        );
+        
+        if (file_handle == windows.INVALID_HANDLE_VALUE) {
+            return error.FileOpenFailed;
+        }
+        errdefer _ = windows.CloseHandle(file_handle);
+        
+        // Get file size
+        var file_size: windows.LARGE_INTEGER = undefined;
+        if (windows.kernel32.GetFileSizeEx(file_handle, &file_size) == 0) {
+            return error.StatFailed;
+        }
+        
+        const size = @as(u64, @intCast(file_size));
+        
+        // Create file mapping
+        const map_handle = windows.kernel32.CreateFileMappingW(
+            file_handle,
+            null,
+            windows.PAGE_READONLY,
+            0,
+            0,
+            null,
+        );
+        
+        if (map_handle == null) {
+            return error.CreateMappingFailed;
+        }
+        errdefer _ = windows.CloseHandle(map_handle);
+        
+        // Map view of file
+        const ptr = windows.kernel32.MapViewOfFile(
+            map_handle,
+            windows.FILE_MAP_READ,
+            0,
+            0,
+            0,
+        );
+        
+        if (ptr == null) {
+            return error.MapViewFailed;
+        }
+        
+        const data = @as([*]const u8, @ptrCast(ptr))[0..size];
+        
+        // Get file time for change detection
+        var file_time: windows.FILETIME = undefined;
+        _ = windows.kernel32.GetFileTime(file_handle, null, null, &file_time);
+        
+        return Self{
+            .allocator = allocator,
+            .path = try allocator.dupe(u8, path),
+            .data = data,
+            .generation = 0,
+            .file_handle = file_handle,
+            .map_handle = map_handle.?,
+            .size = size,
+            .mtime_ns = @as(i128, file_time.dwHighDateTime) << 32 | file_time.dwLowDateTime,
+            .device_id = 0, // Volume serial number would go here
+            .inode = 0, // File ID would go here
+        };
+    }
+    
+    pub fn remapIfChanged(self: *Self) !bool {
+        if (builtin.os.tag == .windows) {
+            return self.remapIfChangedWindows();
+        } else {
+            return self.remapIfChangedPosix();
+        }
+    }
+    
+    fn remapIfChangedPosix(self: *Self) !bool {
+        const stat = try self.file_handle.stat();
+        
+        // Check for rotation (different inode)
+        if (stat.inode != self.inode) {
+            // File was rotated, we need to reopen
+            self.close();
+            const new_file = try Self.open(self.allocator, self.path);
+            self.* = new_file;
+            return true;
+        }
+        
+        // Check if size changed
+        if (stat.size != self.size) {
+            // Unmap old view
+            std.posix.munmap(@alignCast(self.data));
+            
+            // Remap with new size
+            self.data = try std.posix.mmap(
+                null,
+                stat.size,
+                std.posix.PROT.READ,
+                .{ .TYPE = .PRIVATE },
+                self.file_handle.handle,
+                0,
+            );
+            
+            self.size = stat.size;
+            self.mtime_ns = stat.mtime;
+            self.generation += 1;
+            return true;
+        }
+        
+        return false;
+    }
+    
+    fn remapIfChangedWindows(self: *Self) !bool {
+        // Get current file size
+        var file_size: windows.LARGE_INTEGER = undefined;
+        if (windows.kernel32.GetFileSizeEx(self.file_handle, &file_size) == 0) {
+            return error.StatFailed;
+        }
+        
+        const new_size = @as(u64, @intCast(file_size));
+        
+        // Check if size changed
+        if (new_size != self.size) {
+            // Unmap old view (but keep file handle open!)
+            _ = windows.kernel32.UnmapViewOfFile(@ptrCast(self.data.ptr));
+            _ = windows.CloseHandle(self.map_handle);
+            
+            // Create new mapping with same file handle
+            const map_handle = windows.kernel32.CreateFileMappingW(
+                self.file_handle,
+                null,
+                windows.PAGE_READONLY,
+                0,
+                0,
+                null,
+            );
+            
+            if (map_handle == null) {
+                return error.CreateMappingFailed;
+            }
+            
+            // Map new view
+            const ptr = windows.kernel32.MapViewOfFile(
+                map_handle,
+                windows.FILE_MAP_READ,
+                0,
+                0,
+                0,
+            );
+            
+            if (ptr == null) {
+                _ = windows.CloseHandle(map_handle);
+                return error.MapViewFailed;
+            }
+            
+            self.data = @as([*]const u8, @ptrCast(ptr))[0..new_size];
+            self.map_handle = map_handle.?;
+            self.size = new_size;
+            self.generation += 1;
+            return true;
+        }
+        
+        return false;
+    }
+    
+    pub fn close(self: *Self) void {
+        if (builtin.os.tag == .windows) {
+            _ = windows.kernel32.UnmapViewOfFile(@ptrCast(self.data.ptr));
+            _ = windows.CloseHandle(self.map_handle);
+            _ = windows.CloseHandle(self.file_handle);
+        } else {
+            std.posix.munmap(@alignCast(self.data));
+            self.file_handle.close();
+        }
+        self.allocator.free(self.path);
+    }
+    
+    // Helper to find line boundaries (CRLF-safe)
+    pub fn findLines(self: Self, start_byte: u64, end_byte: u64) LineIterator {
+        return LineIterator{
+            .data = self.data,
+            .pos = start_byte,
+            .end = @min(end_byte, self.size),
+        };
+    }
+};
+
+pub const LineIterator = struct {
+    data: []const u8,
+    pos: u64,
+    end: u64,
+    
+    pub const Line = struct {
+        content: []const u8,
+        start: u64,
+        end: u64, // exclusive
+    };
+    
+    pub fn next(self: *LineIterator) ?Line {
+        if (self.pos >= self.end) return null;
+        
+        const start = self.pos;
+        
+        // Find next newline
+        while (self.pos < self.end) : (self.pos += 1) {
+            if (self.data[self.pos] == '\n') {
+                var line_end = self.pos;
+                
+                // Trim \r if present (CRLF handling)
+                if (line_end > start and self.data[line_end - 1] == '\r') {
+                    line_end -= 1;
+                }
+                
+                const line = Line{
+                    .content = self.data[start..line_end],
+                    .start = start,
+                    .end = self.pos + 1, // Include the \n
+                };
+                
+                self.pos += 1; // Move past \n
+                return line;
+            }
+        }
+        
+        // No newline found - this is a partial line
+        return null;
+    }
+};
+
+// Block Index (.bix) - O(1) line access with incremental updates
+pub const BlockIndex = struct {
+    const MAGIC: u32 = 0x31584942; // "BIX1"
+    const BIX_VERSION: u8 = 1;
+    const DEFAULT_BLOCK_SIZE: u16 = 256;
+    
+    pub const Header = packed struct {
+        magic: u32 = MAGIC,
+        version: u8 = BIX_VERSION,
+        block_size: u16 = DEFAULT_BLOCK_SIZE,
+        reserved_byte: u8 = 0,
+        total_lines: u64,
+        last_byte: u64,
+        crc32: u32,
+        reserved1: u32 = 0,
+        reserved2: u32 = 0,
+        reserved3: u32 = 0,
+        reserved4: u32 = 0,
+        reserved5: u32 = 0,
+        reserved6: u32 = 0,
+        reserved7: u32 = 0,
+        reserved8: u32 = 0,
+        reserved9: u32 = 0,
+    };
+    
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    header: Header,
+    block_offsets: []u64,
+    
+    const Self = @This();
+    
+    pub fn create(allocator: std.mem.Allocator, jsonl_path: []const u8) !Self {
+        const bix_path = try std.fmt.allocPrint(allocator, "{s}.bix", .{jsonl_path});
+        
+        return Self{
+            .allocator = allocator,
+            .path = bix_path,
+            .header = Header{},
+            .block_offsets = &[_]u64{},
+        };
+    }
+    
+    pub fn load(allocator: std.mem.Allocator, jsonl_path: []const u8) !Self {
+        const bix_path = try std.fmt.allocPrint(allocator, "{s}.bix", .{jsonl_path});
+        errdefer allocator.free(bix_path);
+        
+        const file = std.fs.openFileAbsolute(bix_path, .{}) catch {
+            // No index file exists yet
+            return Self{
+                .allocator = allocator,
+                .path = bix_path,
+                .header = Header{
+                    .total_lines = 0,
+                    .last_byte = 0,
+                    .crc32 = 0,
+                },
+                .block_offsets = &[_]u64{},
+            };
+        };
+        defer file.close();
+        
+        // Read header
+        var header: Header = undefined;
+        _ = try file.read(std.mem.asBytes(&header));
+        
+        if (header.magic != MAGIC or header.version != BIX_VERSION) {
+            return error.InvalidBixFile;
+        }
+        
+        // Read block offsets
+        const blocks_count = (header.total_lines + header.block_size - 1) / header.block_size;
+        const block_offsets = try allocator.alloc(u64, blocks_count);
+        _ = try file.read(std.mem.sliceAsBytes(block_offsets));
+        
+        return Self{
+            .allocator = allocator,
+            .path = bix_path,
+            .header = header,
+            .block_offsets = block_offsets,
+        };
+    }
+    
+    pub fn appendIncremental(self: *Self, mapped_file: *const MappedFile) !void {
+        var crc = std.hash.Crc32.init();
+        
+        // If we have existing data, start CRC from there
+        if (self.header.last_byte > 0) {
+            crc.update(mapped_file.data[0..self.header.last_byte]);
+        }
+        
+        var line_count = self.header.total_lines;
+        var pos = self.header.last_byte;
+        var new_blocks = std.ArrayList(u64).init(self.allocator);
+        defer new_blocks.deinit();
+        
+        // Scan for new lines starting from last_byte
+        var iter = mapped_file.findLines(pos, mapped_file.size);
+        while (iter.next()) |line| {
+            // Update CRC with new data
+            crc.update(mapped_file.data[pos..line.end]);
+            pos = line.end;
+            
+            line_count += 1;
+            
+            // Record block boundary
+            if (line_count % self.header.block_size == 0) {
+                try new_blocks.append(line.end);
+            }
+        }
+        
+        // Only update if we found new complete lines
+        if (line_count > self.header.total_lines) {
+            // Extend block_offsets array
+            const old_len = self.block_offsets.len;
+            const new_total = old_len + new_blocks.items.len;
+            
+            if (new_blocks.items.len > 0) {
+                // Properly handle empty slice case
+                if (self.block_offsets.len == 0) {
+                    self.block_offsets = try self.allocator.alloc(u64, new_blocks.items.len);
+                    @memcpy(self.block_offsets, new_blocks.items);
+                } else {
+                    self.block_offsets = try self.allocator.realloc(self.block_offsets, new_total);
+                    @memcpy(self.block_offsets[old_len..], new_blocks.items);
+                }
+            }
+            
+            // Update header (this will be written last for atomicity)
+            self.header.total_lines = line_count;
+            self.header.last_byte = pos;
+            self.header.crc32 = crc.final();
+            
+            // Write to file atomically
+            try self.writeAtomic();
+        }
+    }
+    
+    fn writeAtomic(self: *Self) !void {
+        // Write to temp file first
+        const tmp_path = try std.fmt.allocPrint(self.allocator, "{s}.tmp", .{self.path});
+        defer self.allocator.free(tmp_path);
+        
+        const file = try std.fs.createFileAbsolute(tmp_path, .{});
+        defer file.close();
+        
+        // Write block offsets first
+        try file.writeAll(std.mem.sliceAsBytes(self.block_offsets));
+        
+        // Write header last (single atomic write makes it valid)
+        try file.seekTo(0);
+        try file.writeAll(std.mem.asBytes(&self.header));
+        try file.writeAll(std.mem.sliceAsBytes(self.block_offsets));
+        
+        // Sync to disk
+        try file.sync();
+        
+        // Atomic rename
+        try std.fs.renameAbsolute(tmp_path, self.path);
+    }
+    
+    pub fn getLineOffset(self: Self, line_no: u64) ?u64 {
+        if (line_no >= self.header.total_lines) return null;
+        if (line_no == 0) return 0;
+        
+        const block_idx = line_no / self.header.block_size;
+        if (block_idx == 0) return 0;
+        
+        // Bounds check
+        if (block_idx - 1 >= self.block_offsets.len) return null;
+        
+        return self.block_offsets[block_idx - 1];
+    }
+    
+    pub fn deinit(self: *Self) void {
+        self.allocator.free(self.path);
+        if (self.block_offsets.len > 0) {
+            self.allocator.free(self.block_offsets);
+        }
+    }
+};
+
+// ================================================================================
+// SECTION 3: SQLite Database Layer
+// ================================================================================
+
+const sqlite = @cImport({
+    @cInclude("sqlite3.h");
+});
+
+pub const Database = struct {
+    allocator: std.mem.Allocator,
+    db: *sqlite.sqlite3,
+    
+    // Prepared statements for hot paths
+    insert_message_stmt: ?*sqlite.sqlite3_stmt = null,
+    get_messages_stmt: ?*sqlite.sqlite3_stmt = null,
+    update_source_file_stmt: ?*sqlite.sqlite3_stmt = null,
+    get_latest_source_stmt: ?*sqlite.sqlite3_stmt = null,
+    
+    const Self = @This();
+    
+    pub fn init(allocator: std.mem.Allocator, path: []const u8) !Self {
+        var db: ?*sqlite.sqlite3 = null;
+        const path_z = try allocator.dupeZ(u8, path);
+        defer allocator.free(path_z);
+        
+        if (sqlite.sqlite3_open(path_z, &db) != sqlite.SQLITE_OK) {
+            return error.DatabaseOpenFailed;
+        }
+        errdefer _ = sqlite.sqlite3_close(db);
+        
+        var self = Self{
+            .allocator = allocator,
+            .db = db.?,
+        };
+        
+        // Set pragmas for performance
+        try self.exec("PRAGMA journal_mode=WAL");
+        try self.exec("PRAGMA synchronous=NORMAL");
+        try self.exec("PRAGMA foreign_keys=ON");
+        try self.exec("PRAGMA page_size=8192");
+        try self.exec("PRAGMA temp_store=MEMORY");
+        try self.exec("PRAGMA cache_size=-64000"); // ~64MB
+        
+        // Create schema if needed
+        try self.createSchema();
+        
+        // Prepare hot path statements
+        try self.prepareStatements();
+        
+        return self;
+    }
+    
+    fn createSchema(self: *Self) !void {
+        // Create tables
+        try self.exec(
+            \\CREATE TABLE IF NOT EXISTS source_files (
+            \\  id INTEGER PRIMARY KEY,
+            \\  path TEXT UNIQUE NOT NULL,
+            \\  device_id TEXT,
+            \\  inode TEXT,
+            \\  size_bytes INTEGER NOT NULL,
+            \\  mtime_ns INTEGER NOT NULL,
+            \\  last_line INTEGER NOT NULL DEFAULT 0,
+            \\  last_byte INTEGER NOT NULL DEFAULT 0,
+            \\  truncated INTEGER NOT NULL DEFAULT 0,
+            \\  checksum TEXT
+            \\)
+        );
+        
+        try self.exec(
+            \\CREATE TABLE IF NOT EXISTS conversations (
+            \\  id TEXT PRIMARY KEY,
+            \\  display_title TEXT,
+            \\  created_at INTEGER,
+            \\  updated_at INTEGER,
+            \\  last_position INTEGER NOT NULL DEFAULT 0,
+            \\  message_count INTEGER NOT NULL DEFAULT 0,
+            \\  total_chars INTEGER NOT NULL DEFAULT 0
+            \\)
+        );
+        
+        try self.exec(
+            \\CREATE TABLE IF NOT EXISTS messages (
+            \\  id INTEGER PRIMARY KEY,
+            \\  conversation_id TEXT NOT NULL,
+            \\  source_file_id INTEGER NOT NULL,
+            \\  line_no INTEGER NOT NULL,
+            \\  byte_start INTEGER NOT NULL,
+            \\  byte_end INTEGER NOT NULL,
+            \\  position INTEGER NOT NULL,
+            \\  role TEXT NOT NULL,
+            \\  content TEXT NOT NULL,
+            \\  timestamp INTEGER,
+            \\  FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+            \\  FOREIGN KEY(source_file_id) REFERENCES source_files(id),
+            \\  UNIQUE(source_file_id, line_no)
+            \\)
+        );
+        
+        // Create indexes
+        try self.exec("CREATE INDEX IF NOT EXISTS idx_msg_conv_pos_desc ON messages(conversation_id, position DESC)");
+        try self.exec("CREATE INDEX IF NOT EXISTS idx_msg_file_line ON messages(source_file_id, line_no)");
+        try self.exec("CREATE INDEX IF NOT EXISTS idx_conv_updated_desc ON conversations(updated_at DESC)");
+        
+        // Create FTS5 table for search
+        try self.exec(
+            \\CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+            \\  content,
+            \\  conversation_id UNINDEXED,
+            \\  content='messages',
+            \\  content_rowid='id',
+            \\  tokenize='unicode61'
+            \\)
+        );
+        
+        // Create triggers for FTS
+        try self.exec(
+            \\CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+            \\  INSERT INTO messages_fts(rowid, content, conversation_id)
+            \\  VALUES (new.id, new.content, new.conversation_id);
+            \\END
+        );
+        
+        try self.exec(
+            \\CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+            \\  INSERT INTO messages_fts(messages_fts, rowid, content, conversation_id)
+            \\  VALUES ('delete', old.id, old.content, old.conversation_id);
+            \\END
+        );
+        
+        try self.exec(
+            \\CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+            \\  INSERT INTO messages_fts(messages_fts, rowid, content, conversation_id)
+            \\  VALUES ('delete', old.id, old.content, old.conversation_id);
+            \\  INSERT INTO messages_fts(rowid, content, conversation_id)
+            \\  VALUES (new.id, new.content, new.conversation_id);
+            \\END
+        );
+    }
+    
+    fn prepareStatements(self: *Self) !void {
+        // Insert message statement
+        const insert_sql = 
+            \\INSERT OR IGNORE INTO messages 
+            \\(conversation_id, source_file_id, line_no, byte_start, byte_end, position, role, content, timestamp)
+            \\VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ;
+        if (sqlite.sqlite3_prepare_v2(self.db, insert_sql, -1, &self.insert_message_stmt, null) != sqlite.SQLITE_OK) {
+            return error.PrepareStatementFailed;
+        }
+        
+        // Get messages with keyset pagination
+        const get_messages_sql =
+            \\SELECT id, role, content, position, timestamp
+            \\FROM messages
+            \\WHERE conversation_id = ? AND position < ?
+            \\ORDER BY position DESC
+            \\LIMIT ?
+        ;
+        if (sqlite.sqlite3_prepare_v2(self.db, get_messages_sql, -1, &self.get_messages_stmt, null) != sqlite.SQLITE_OK) {
+            return error.PrepareStatementFailed;
+        }
+        
+        // Update source file progress
+        const update_source_sql =
+            \\UPDATE source_files 
+            \\SET last_line = ?, last_byte = ?, size_bytes = ?, mtime_ns = ?
+            \\WHERE id = ?
+        ;
+        if (sqlite.sqlite3_prepare_v2(self.db, update_source_sql, -1, &self.update_source_file_stmt, null) != sqlite.SQLITE_OK) {
+            return error.PrepareStatementFailed;
+        }
+        
+        // Get latest source file for conversation
+        const get_latest_sql =
+            \\SELECT sf.id, sf.path, sf.last_byte
+            \\FROM source_files sf
+            \\JOIN messages m ON m.source_file_id = sf.id
+            \\WHERE m.conversation_id = ?
+            \\ORDER BY m.id DESC
+            \\LIMIT 1
+        ;
+        if (sqlite.sqlite3_prepare_v2(self.db, get_latest_sql, -1, &self.get_latest_source_stmt, null) != sqlite.SQLITE_OK) {
+            return error.PrepareStatementFailed;
+        }
+    }
+    
+    pub fn exec(self: *Self, sql: []const u8) !void {
+        const sql_z = try self.allocator.dupeZ(u8, sql);
+        defer self.allocator.free(sql_z);
+        
+        if (sqlite.sqlite3_exec(self.db, sql_z, null, null, null) != sqlite.SQLITE_OK) {
+            std.debug.print("SQL Error: {s}\n", .{sqlite.sqlite3_errmsg(self.db)});
+            return error.SqlExecFailed;
+        }
+    }
+    
+    pub fn beginTransaction(self: *Self) !void {
+        try self.exec("BEGIN IMMEDIATE");
+    }
+    
+    pub fn commit(self: *Self) !void {
+        try self.exec("COMMIT");
+    }
+    
+    pub fn rollback(self: *Self) !void {
+        try self.exec("ROLLBACK");
+    }
+    
+    // Get or create source file entry
+    pub fn getOrCreateSourceFile(self: *Self, path: []const u8, stat: std.fs.File.Stat) !i64 {
+        const sql = 
+            \\INSERT OR IGNORE INTO source_files (path, device_id, inode, size_bytes, mtime_ns)
+            \\VALUES (?, ?, ?, ?, ?)
+        ;
+        
+        var stmt: ?*sqlite.sqlite3_stmt = null;
+        defer _ = sqlite.sqlite3_finalize(stmt);
+        
+        const sql_z = try self.allocator.dupeZ(u8, sql);
+        defer self.allocator.free(sql_z);
+        
+        if (sqlite.sqlite3_prepare_v2(self.db, sql_z, -1, &stmt, null) != sqlite.SQLITE_OK) {
+            return error.PrepareStatementFailed;
+        }
+        
+        const path_z = try self.allocator.dupeZ(u8, path);
+        defer self.allocator.free(path_z);
+        
+        _ = sqlite.sqlite3_bind_text(stmt, 1, path_z, @intCast(path.len), sqlite.SQLITE_STATIC);
+        _ = sqlite.sqlite3_bind_text(stmt, 2, "0", 1, sqlite.SQLITE_STATIC); // device_id placeholder
+        _ = sqlite.sqlite3_bind_text(stmt, 3, "0", 1, sqlite.SQLITE_STATIC); // inode placeholder
+        _ = sqlite.sqlite3_bind_int64(stmt, 4, @intCast(stat.size));
+        _ = sqlite.sqlite3_bind_int64(stmt, 5, @intCast(stat.mtime));
+        
+        if (sqlite.sqlite3_step(stmt) != sqlite.SQLITE_DONE) {
+            return error.InsertFailed;
+        }
+        
+        // Get the ID
+        return sqlite.sqlite3_last_insert_rowid(self.db);
+    }
+    
+    // Get conversation positions for incremental import
+    pub fn getConversationPositions(self: *Self) !std.StringHashMap(i64) {
+        var map = std.StringHashMap(i64).init(self.allocator);
+        
+        const sql = "SELECT id, last_position FROM conversations";
+        var stmt: ?*sqlite.sqlite3_stmt = null;
+        defer _ = sqlite.sqlite3_finalize(stmt);
+        
+        const sql_z = try self.allocator.dupeZ(u8, sql);
+        defer self.allocator.free(sql_z);
+        
+        if (sqlite.sqlite3_prepare_v2(self.db, sql_z, -1, &stmt, null) != sqlite.SQLITE_OK) {
+            return error.PrepareStatementFailed;
+        }
+        
+        while (sqlite.sqlite3_step(stmt) == sqlite.SQLITE_ROW) {
+            const id = std.mem.span(sqlite.sqlite3_column_text(stmt, 0));
+            const position = sqlite.sqlite3_column_int64(stmt, 1);
+            try map.put(try self.allocator.dupe(u8, id), position);
+        }
+        
+        return map;
+    }
+    
+    pub fn deinit(self: *Self) void {
+        if (self.insert_message_stmt) |stmt| _ = sqlite.sqlite3_finalize(stmt);
+        if (self.get_messages_stmt) |stmt| _ = sqlite.sqlite3_finalize(stmt);
+        if (self.update_source_file_stmt) |stmt| _ = sqlite.sqlite3_finalize(stmt);
+        if (self.get_latest_source_stmt) |stmt| _ = sqlite.sqlite3_finalize(stmt);
+        _ = sqlite.sqlite3_close(self.db);
+    }
+};
+
+// ================================================================================
+// SECTION 4: Incremental Importer with Live Tail Overlay
+// ================================================================================
+
+pub const IncrementalImporter = struct {
+    allocator: std.mem.Allocator,
+    db: *Database,
+    mapped_files: std.StringHashMap(*MappedFile),
+    block_indexes: std.StringHashMap(*BlockIndex),
+    conv_positions: std.StringHashMap(i64),
+    
+    const Self = @This();
+    
+    pub fn init(allocator: std.mem.Allocator, db: *Database) !Self {
+        return Self{
+            .allocator = allocator,
+            .db = db,
+            .mapped_files = std.StringHashMap(*MappedFile).init(allocator),
+            .block_indexes = std.StringHashMap(*BlockIndex).init(allocator),
+            .conv_positions = try db.getConversationPositions(),
+        };
+    }
+    
+    pub fn importFile(self: *Self, path: []const u8) !void {
+        // Get or create mapped file
+        var mapped_file = self.mapped_files.get(path) orelse blk: {
+            const mf = try self.allocator.create(MappedFile);
+            mf.* = try MappedFile.open(self.allocator, path);
+            try self.mapped_files.put(path, mf);
+            break :blk mf;
+        };
+        
+        // Check for changes and remap if needed
+        _ = try mapped_file.remapIfChanged();
+        
+        // Get or create block index
+        var block_idx = self.block_indexes.get(path) orelse blk: {
+            const bi = try self.allocator.create(BlockIndex);
+            bi.* = try BlockIndex.load(self.allocator, path);
+            try self.block_indexes.put(path, bi);
+            break :blk bi;
+        };
+        
+        // Update block index incrementally
+        try block_idx.appendIncremental(mapped_file);
+        
+        // Get source file record
+        const file = try std.fs.openFileAbsolute(path, .{});
+        defer file.close();
+        const stat = try file.stat();
+        const source_file_id = try self.db.getOrCreateSourceFile(path, stat);
+        
+        // Begin transaction for batch inserts
+        try self.db.beginTransaction();
+        defer self.db.rollback() catch {};
+        
+        // Import new lines since last_byte
+        var line_no = block_idx.header.total_lines;
+        var iter = mapped_file.findLines(block_idx.header.last_byte, mapped_file.size);
+        
+        var batch_count: usize = 0;
+        const batch_size = 5000;
+        
+        while (iter.next()) |line| {
+            // Parse JSON line
+            const parsed = std.json.parseFromSlice(
+                std.json.Value,
+                self.allocator,
+                line.content,
+                .{ .allocate = .alloc_always }
+            ) catch continue;
+            defer parsed.deinit();
+            
+            // Extract conversation info
+            const conv_id = self.extractConversationId(parsed.value, path) catch continue;
+            const role = self.extractRole(parsed.value) catch continue;
+            const content = self.extractContent(parsed.value) catch continue;
+            const timestamp = self.extractTimestamp(parsed.value);
+            
+            // Get or increment position for this conversation
+            const position = blk: {
+                const entry = try self.conv_positions.getOrPut(conv_id);
+                if (!entry.found_existing) {
+                    entry.value_ptr.* = 0;
+                }
+                entry.value_ptr.* += 1;
+                break :blk entry.value_ptr.*;
+            };
+            
+            // Insert message using prepared statement
+            const stmt = self.db.insert_message_stmt.?;
+            _ = sqlite.sqlite3_reset(stmt);
+            _ = sqlite.sqlite3_bind_text(stmt, 1, conv_id.ptr, @intCast(conv_id.len), sqlite.SQLITE_STATIC);
+            _ = sqlite.sqlite3_bind_int64(stmt, 2, source_file_id);
+            _ = sqlite.sqlite3_bind_int64(stmt, 3, @intCast(line_no));
+            _ = sqlite.sqlite3_bind_int64(stmt, 4, @intCast(line.start));
+            _ = sqlite.sqlite3_bind_int64(stmt, 5, @intCast(line.end));
+            _ = sqlite.sqlite3_bind_int64(stmt, 6, position);
+            _ = sqlite.sqlite3_bind_text(stmt, 7, role.ptr, @intCast(role.len), sqlite.SQLITE_STATIC);
+            _ = sqlite.sqlite3_bind_text(stmt, 8, content.ptr, @intCast(content.len), sqlite.SQLITE_STATIC);
+            if (timestamp) |ts| {
+                _ = sqlite.sqlite3_bind_int64(stmt, 9, ts);
+            } else {
+                _ = sqlite.sqlite3_bind_null(stmt, 9);
+            }
+            
+            if (sqlite.sqlite3_step(stmt) != sqlite.SQLITE_DONE) {
+                continue; // Skip on constraint violation (duplicate)
+            }
+            
+            line_no += 1;
+            batch_count += 1;
+            
+            // Commit periodically
+            if (batch_count >= batch_size) {
+                try self.db.commit();
+                try self.db.beginTransaction();
+                batch_count = 0;
+            }
+        }
+        
+        // Update source file progress
+        const update_stmt = self.db.update_source_file_stmt.?;
+        _ = sqlite.sqlite3_reset(update_stmt);
+        _ = sqlite.sqlite3_bind_int64(update_stmt, 1, @intCast(line_no));
+        _ = sqlite.sqlite3_bind_int64(update_stmt, 2, @intCast(mapped_file.size));
+        _ = sqlite.sqlite3_bind_int64(update_stmt, 3, @intCast(mapped_file.size));
+        _ = sqlite.sqlite3_bind_int64(update_stmt, 4, @intCast(mapped_file.mtime_ns));
+        _ = sqlite.sqlite3_bind_int64(update_stmt, 5, source_file_id);
+        _ = sqlite.sqlite3_step(update_stmt);
+        
+        // Final commit
+        try self.db.commit();
+    }
+    
+    fn extractConversationId(self: *Self, value: std.json.Value, file_path: []const u8) ![]const u8 {
+        _ = value; // Ignore JSON conversation_id to use filename instead
+        
+        // Use the filename as the conversation ID
+        const basename = std.fs.path.basename(file_path);
+        
+        // Remove .jsonl extension if present
+        if (std.mem.endsWith(u8, basename, ".jsonl")) {
+            const name_without_ext = basename[0..basename.len - 6];
+            return try self.allocator.dupe(u8, name_without_ext);
+        }
+        
+        return try self.allocator.dupe(u8, basename);
+    }
+    
+    fn extractRole(self: *Self, value: std.json.Value) ![]const u8 {
+        _ = self;
+        if (value != .object) return error.InvalidJson;
+        const role = value.object.get("type") orelse return error.MissingField;
+        if (role != .string) return error.InvalidType;
+        return role.string;
+    }
+    
+    fn extractContent(self: *Self, value: std.json.Value) ![]const u8 {
+        _ = self;
+        if (value != .object) return error.InvalidJson;
+        const content = value.object.get("content") orelse return error.MissingField;
+        
+        switch (content) {
+            .string => return content.string,
+            .array => {
+                // Handle array of content blocks (assistant messages)
+                for (content.array.items) |item| {
+                    if (item != .object) continue;
+                    if (item.object.get("text")) |text| {
+                        if (text == .string) return text.string;
+                    }
+                }
+                return "";
+            },
+            else => return error.InvalidType,
+        }
+    }
+    
+    fn extractTimestamp(self: *Self, value: std.json.Value) ?i64 {
+        _ = self;
+        if (value != .object) return null;
+        const ts = value.object.get("timestamp") orelse return null;
+        switch (ts) {
+            .integer => return ts.integer,
+            .float => return @intFromFloat(ts.float),
+            else => return null,
+        }
+    }
+    
+    pub fn getMessagesWithTailOverlay(
+        self: *Self,
+        conv_id: []const u8,
+        before_position: i64,
+        limit: usize,
+    ) ![]Message {
+        // Get messages from DB
+        const stmt = self.db.get_messages_stmt.?;
+        _ = sqlite.sqlite3_reset(stmt);
+        _ = sqlite.sqlite3_bind_text(stmt, 1, conv_id.ptr, @intCast(conv_id.len), sqlite.SQLITE_STATIC);
+        _ = sqlite.sqlite3_bind_int64(stmt, 2, before_position);
+        _ = sqlite.sqlite3_bind_int64(stmt, 3, @intCast(limit));
+        
+        var db_messages = std.ArrayList(Message).init(self.allocator);
+        defer db_messages.deinit();
+        
+        while (sqlite.sqlite3_step(stmt) == sqlite.SQLITE_ROW) {
+            const role_str = std.mem.span(sqlite.sqlite3_column_text(stmt, 1));
+            const role = if (std.mem.eql(u8, role_str, "user")) Role.user
+                else if (std.mem.eql(u8, role_str, "assistant")) Role.assistant
+                else Role.system;
+            
+            const content = std.mem.span(sqlite.sqlite3_column_text(stmt, 2));
+            const position = sqlite.sqlite3_column_int64(stmt, 3);
+            const timestamp = if (sqlite.sqlite3_column_type(stmt, 4) != sqlite.SQLITE_NULL)
+                sqlite.sqlite3_column_int64(stmt, 4)
+            else
+                null;
+            
+            try db_messages.append(Message{
+                .role = role,
+                .content = try self.allocator.dupe(u8, content),
+                .timestamp = timestamp,
+            });
+            
+            _ = position; // Track for tail overlay boundary
+        }
+        
+        // Get latest source file for tail overlay
+        const latest_stmt = self.db.get_latest_source_stmt.?;
+        _ = sqlite.sqlite3_reset(latest_stmt);
+        _ = sqlite.sqlite3_bind_text(latest_stmt, 1, conv_id.ptr, @intCast(conv_id.len), sqlite.SQLITE_STATIC);
+        
+        if (sqlite.sqlite3_step(latest_stmt) == sqlite.SQLITE_ROW) {
+            const source_path = std.mem.span(sqlite.sqlite3_column_text(latest_stmt, 1));
+            const last_byte = @as(u64, @intCast(sqlite.sqlite3_column_int64(latest_stmt, 2)));
+            
+            // Check for unindexed tail
+            if (self.mapped_files.get(source_path)) |mapped_file| {
+                if (mapped_file.size > last_byte) {
+                    // Parse tail lines
+                    var tail_messages = std.ArrayList(Message).init(self.allocator);
+                    defer tail_messages.deinit();
+                    
+                    var iter = mapped_file.findLines(last_byte, mapped_file.size);
+                    while (iter.next()) |line| {
+                        const parsed = std.json.parseFromSlice(
+                            std.json.Value,
+                            self.allocator,
+                            line.content,
+                            .{ .allocate = .alloc_always }
+                        ) catch continue;
+                        defer parsed.deinit();
+                        
+                        const line_conv_id = self.extractConversationId(parsed.value, source_path) catch continue;
+                        if (!std.mem.eql(u8, line_conv_id, conv_id)) continue;
+                        
+                        const role_str = self.extractRole(parsed.value) catch continue;
+                        const role = if (std.mem.eql(u8, role_str, "user")) Role.user
+                            else if (std.mem.eql(u8, role_str, "assistant")) Role.assistant
+                            else Role.system;
+                        
+                        const content = self.extractContent(parsed.value) catch continue;
+                        const timestamp = self.extractTimestamp(parsed.value);
+                        
+                        try tail_messages.append(Message{
+                            .role = role,
+                            .content = try self.allocator.dupe(u8, content),
+                            .timestamp = timestamp,
+                        });
+                    }
+                    
+                    // Merge tail with DB results (newest first)
+                    const total_messages = db_messages.items.len + tail_messages.items.len;
+                    var result = try self.allocator.alloc(Message, total_messages);
+                    
+                    // Copy tail messages first (they're newest)
+                    @memcpy(result[0..tail_messages.items.len], tail_messages.items);
+                    // Then DB messages
+                    @memcpy(result[tail_messages.items.len..], db_messages.items);
+                    
+                    return result;
+                }
+            }
+        }
+        
+        // No tail overlay needed, just return DB results
+        return db_messages.toOwnedSlice();
+    }
+    
+    pub fn deinit(self: *Self) void {
+        var mf_iter = self.mapped_files.iterator();
+        while (mf_iter.next()) |entry| {
+            entry.value_ptr.*.close();
+            self.allocator.destroy(entry.value_ptr.*);
+        }
+        self.mapped_files.deinit();
+        
+        var bi_iter = self.block_indexes.iterator();
+        while (bi_iter.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
+        }
+        self.block_indexes.deinit();
+        
+        var cp_iter = self.conv_positions.iterator();
+        while (cp_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.conv_positions.deinit();
+    }
+};
+
+// ================================================================================
+// SECTION 5: File System Operations (Port of find_sessions)
 // ================================================================================
 
 const FileSystem = struct {
@@ -153,10 +1226,18 @@ const FileSystem = struct {
     pub fn findSessions(self: *FileSystem, project_path: ?[]const u8) ![][]const u8 {
         var sessions = std.ArrayList([]const u8).init(self.allocator);
         
-        const search_dir = if (project_path) |proj|
-            try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.claude_dir, proj })
-        else
-            self.claude_dir;
+        const search_dir = if (project_path) |proj| blk: {
+            // If project path is absolute (starts with /), use it directly
+            if (proj.len > 0 and proj[0] == '/') {
+                break :blk try self.allocator.dupe(u8, proj);
+            } else {
+                // Otherwise, treat it as relative to claude_dir
+                break :blk try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.claude_dir, proj });
+            }
+        } else
+            try self.allocator.dupe(u8, self.claude_dir);
+        
+        defer self.allocator.free(search_dir);
         
         var dir = std.fs.openDirAbsolute(search_dir, .{ .iterate = true }) catch {
             std.debug.print("⚠️  Cannot open directory: {s}\n", .{search_dir});
@@ -227,6 +1308,12 @@ const StreamingJSONLParser = struct {
         self.allocator.free(self.buffer);
         self.arena.deinit();
         self.line_arena.deinit();
+    }
+    
+    pub fn reset(self: *StreamingJSONLParser) void {
+        // Reset arenas for next file
+        _ = self.arena.reset(.retain_capacity);
+        _ = self.line_arena.reset(.retain_capacity);
     }
     
     // Stream parse large files without loading everything into memory
@@ -322,7 +1409,13 @@ const StreamingJSONLParser = struct {
     }
     
     pub fn parseFile(self: *StreamingJSONLParser, file_path: []const u8) !Conversation {
-        return try self.parseFileStreaming(file_path);
+        const stderr = std.io.getStdErr().writer();
+        try stderr.print("PARSER: Starting to parse file: {s}\n", .{std.fs.path.basename(file_path)});
+        const result = try self.parseFileStreaming(file_path);
+        try stderr.print("PARSER: Finished parsing {s} - id: {s}, messages: {d}, chars: {d}\n", .{
+            std.fs.path.basename(file_path), result.id, result.message_count, result.total_chars
+        });
+        return result;
     }
     
     pub fn parseContent(self: *StreamingJSONLParser, content: []const u8, file_path: []const u8) !Conversation {
@@ -337,8 +1430,12 @@ const StreamingJSONLParser = struct {
         var user_count: usize = 0;
         var assistant_count: usize = 0;
         
+        var line_count: usize = 0;
+        var valid_lines: usize = 0;
+        
         // Parse each JSONL line
         while (lines.next()) |line| {
+            line_count += 1;
             if (line.len == 0) continue;
             
             // Use arena allocator for temporary JSON parsing
@@ -388,8 +1485,14 @@ const StreamingJSONLParser = struct {
                 }
                 
                 try messages.append(message);
+                valid_lines += 1;
             }
         }
+        
+        const stderr = std.io.getStdErr().writer();
+        stderr.print("PARSER: File {s} - processed {d} lines, {d} valid messages\n", .{
+            std.fs.path.basename(file_path), line_count, valid_lines
+        }) catch {};
         
         // Extract project name from path
         const project_name = try self.extractProjectName(file_path);
@@ -2071,11 +3174,24 @@ const InvertedIndex = struct {
     total_conversations: usize,
     avg_conversation_length: f32,
     cache_buffers: CacheAwareBufferChain, // Multi-level cache buffers
+    session_id_map: []u32, // Maps internal conv_id to session_id
     
-    pub fn build(allocator: std.mem.Allocator, conversations: []const *Conversation) !*InvertedIndex {
+    pub fn build(allocator: std.mem.Allocator, conversations: []const *Conversation, session_ids: ?[]const u32) !*InvertedIndex {
         // Convert to SoA for better performance - allocate on heap
         var soa_ptr = try allocator.create(ConversationsSoA);
         soa_ptr.* = try ConversationsSoA.init(allocator, conversations);
+        
+        // Create session ID map 
+        var session_map = try allocator.alloc(u32, conversations.len);
+        if (session_ids) |ids| {
+            // Use provided session IDs
+            @memcpy(session_map, ids);
+        } else {
+            // Default to array indices
+            for (0..conversations.len) |i| {
+                session_map[i] = @intCast(i);
+            }
+        }
         
         var index = try allocator.create(InvertedIndex);
         index.* = InvertedIndex{
@@ -2085,6 +3201,7 @@ const InvertedIndex = struct {
             .total_conversations = conversations.len,
             .avg_conversation_length = 0,
             .cache_buffers = try CacheAwareBufferChain.init(allocator),
+            .session_id_map = session_map,
         };
         
         // Calculate average length using SIMD-friendly array
@@ -2095,8 +3212,12 @@ const InvertedIndex = struct {
         index.avg_conversation_length = @as(f32, @floatFromInt(total_length)) / @as(f32, @floatFromInt(conversations.len));
         
         // Build inverted index
+        std.debug.print("Building inverted index for {d} conversations\n", .{conversations.len});
         for (0..conversations.len) |conv_id| {
-            _ = soa_ptr.getMessagesForConversation(conv_id);
+            const messages = soa_ptr.getMessagesForConversation(conv_id);
+            std.debug.print("  Indexing conversation {d}: {d} bytes of messages\n", .{
+                conv_id, messages.len
+            });
             
             // Build word positions map for this conversation
             var word_positions = std.StringHashMap(std.ArrayList(u32)).init(allocator);
@@ -2181,9 +3302,47 @@ const InvertedIndex = struct {
                         .positions_compressed = &[_][]u8{},
                     };
                 } else {
-                    // Free the duplicate if key already exists
+                    // Free the duplicate if key already exists  
                     allocator.free(key_copy);
-                    // TODO: Append to existing posting list (for now, just keeping first occurrence)
+                    
+                    // Append to existing posting list
+                    const existing = posting.value_ptr.*;
+                    
+                    // Check if this conversation is already in the posting list
+                    var already_exists = false;
+                    for (0..existing.conversation_ids_count) |i| {
+                        const offset = i * 4;
+                        const stored_id = std.mem.readInt(u32, existing.conversation_ids_compressed[offset..][0..4], .little);
+                        if (stored_id == conv_id) {
+                            already_exists = true;
+                            break;
+                        }
+                    }
+                    
+                    // Only add if not already present
+                    if (!already_exists) {
+                        // Expand conversation IDs array
+                        const new_conv_ids = try allocator.alloc(u8, existing.conversation_ids_compressed.len + 4);
+                        @memcpy(new_conv_ids[0..existing.conversation_ids_compressed.len], existing.conversation_ids_compressed);
+                        std.mem.writeInt(u32, new_conv_ids[existing.conversation_ids_compressed.len..][0..4], @intCast(conv_id), .little);
+                        
+                        // Expand frequencies array
+                        const new_freqs = try allocator.alloc(u64, existing.conversation_ids_count + 1);
+                        @memcpy(new_freqs[0..existing.conversation_ids_count], existing.frequencies_compressed);
+                        new_freqs[existing.conversation_ids_count] = @intCast(entry.value_ptr.items.len);
+                        
+                        // Free old arrays
+                        allocator.free(existing.conversation_ids_compressed);
+                        allocator.free(existing.frequencies_compressed);
+                        
+                        // Update posting list
+                        posting.value_ptr.* = CompressedPostingList{
+                            .conversation_ids_compressed = new_conv_ids,
+                            .conversation_ids_count = existing.conversation_ids_count + 1,
+                            .frequencies_compressed = new_freqs,
+                            .positions_compressed = &[_][]u8{},
+                        };
+                    }
                 }
             }
         }
@@ -2247,10 +3406,12 @@ const InvertedIndex = struct {
             const conv_id = entry.key_ptr.*;
             const score = entry.value_ptr.*;
             
+            const snippet_result = try self.generateSnippetWithPosition(conv_id, query_terms.items);
             try results.append(SearchResult{
                 .conversation_id = conv_id,
                 .score = score,
-                .snippet = try self.generateSnippet(conv_id, query_terms.items),
+                .snippet = snippet_result.snippet,
+                .position = snippet_result.position,
             });
         }
         
@@ -2283,12 +3444,141 @@ const InvertedIndex = struct {
         return idf * normalized_tf;
     }
     
-    fn generateSnippet(self: *InvertedIndex, conv_id: u32, query_terms: [][]const u8) ![]const u8 {
-        _ = query_terms;
-        // Get first part of conversation messages from pool
-        const messages = self.conversations_soa.getMessagesForConversation(conv_id);
-        const max_len = @min(200, messages.len);
-        return try self.allocator.dupe(u8, messages[0..max_len]);
+    fn generateSnippetWithPosition(self: *InvertedIndex, conv_id: u32, query_terms: [][]const u8) !struct { snippet: []const u8, position: u32 } {
+        // Bounds check
+        if (conv_id >= self.conversations_soa.message_lengths.len) {
+            return .{ .snippet = try self.allocator.dupe(u8, "Invalid conversation"), .position = 0 };
+        }
+        
+        // Get raw message pool data for this conversation
+        const raw_messages = self.conversations_soa.getMessagesForConversation(conv_id);
+        if (raw_messages.len == 0) {
+            return .{ .snippet = try self.allocator.dupe(u8, "Empty conversation"), .position = 0 };
+        }
+        
+        // Parse and clean messages to extract actual conversation text
+        var clean_text = std.ArrayList(u8).init(self.allocator);
+        defer clean_text.deinit();
+        
+        var offset: usize = 0;
+        var message_count: usize = 0;
+        const max_messages = self.conversations_soa.message_lengths[conv_id];
+        
+        // Parse each message from the pool
+        while (offset < raw_messages.len and message_count < max_messages) {
+            // Read role byte
+            const role_byte = raw_messages[offset];
+            offset += 1;
+            
+            // Find end of this message (next role byte or end of data)
+            var msg_end = offset;
+            while (msg_end < raw_messages.len) {
+                // Check if we hit another role byte (0=user, 1=assistant, 2=system)
+                if (msg_end + 1 < raw_messages.len and raw_messages[msg_end] <= 2) {
+                    // Check if this looks like a role byte by seeing if next messages exist
+                    if (message_count + 1 < max_messages) {
+                        break;
+                    }
+                }
+                msg_end += 1;
+            }
+            
+            // Extract message content
+            const msg_content = raw_messages[offset..msg_end];
+            
+            // Add role prefix for context
+            switch (role_byte) {
+                0 => try clean_text.appendSlice("User: "),
+                1 => try clean_text.appendSlice("Assistant: "),
+                2 => try clean_text.appendSlice("System: "),
+                else => {},
+            }
+            
+            // Add the message content (already clean from parsing)
+            try clean_text.appendSlice(msg_content);
+            try clean_text.appendSlice(" ");
+            
+            offset = msg_end;
+            message_count += 1;
+        }
+        
+        const clean_str = clean_text.items;
+        
+        // Build a map of message positions in the clean text
+        var message_positions = std.ArrayList(usize).init(self.allocator);
+        defer message_positions.deinit();
+        
+        // Re-parse to track message boundaries
+        var pos_offset: usize = 0;
+        var msg_count_for_pos: usize = 0;
+        while (pos_offset < raw_messages.len and msg_count_for_pos < max_messages) {
+            try message_positions.append(pos_offset);
+            // Skip role byte
+            pos_offset += 1;
+            // Find end of message
+            while (pos_offset < raw_messages.len) {
+                if (pos_offset + 1 < raw_messages.len and raw_messages[pos_offset] <= 2) {
+                    if (msg_count_for_pos + 1 < max_messages) break;
+                }
+                pos_offset += 1;
+            }
+            msg_count_for_pos += 1;
+        }
+        
+        // Now search for query terms in the clean text
+        var found_position: u32 = 0;
+        for (query_terms) |term| {
+            if (std.ascii.indexOfIgnoreCase(clean_str, term)) |pos| {
+                // Determine which message contains this position
+                // This is approximate since we're searching in clean_text
+                const approx_msg_pos = (pos * max_messages) / clean_str.len;
+                found_position = @intCast(@min(approx_msg_pos, max_messages - 1));
+                
+                // Extract context around match (±100 chars)
+                const context_before = if (pos > 100) 100 else pos;
+                const start = if (pos > context_before) pos - context_before else 0;
+                const end = @min(pos + term.len + 100, clean_str.len);
+                
+                // Find word boundaries for cleaner snippet
+                var actual_start = start;
+                if (start > 0 and start < clean_str.len) {
+                    // Move forward to start of word
+                    while (actual_start < pos and actual_start < clean_str.len and 
+                           clean_str[actual_start] != ' ' and clean_str[actual_start] != '\n') {
+                        actual_start += 1;
+                    }
+                    if (actual_start < clean_str.len and 
+                        (clean_str[actual_start] == ' ' or clean_str[actual_start] == '\n')) {
+                        actual_start += 1;
+                    }
+                }
+                
+                // Build snippet with ellipsis
+                var snippet = std.ArrayList(u8).init(self.allocator);
+                if (actual_start > 0) {
+                    try snippet.appendSlice("...");
+                }
+                
+                // Add snippet content, replacing newlines with spaces
+                for (clean_str[actual_start..end]) |c| {
+                    if (c == '\n' or c == '\r') {
+                        try snippet.append(' ');
+                    } else {
+                        try snippet.append(c);
+                    }
+                }
+                
+                if (end < clean_str.len) {
+                    try snippet.appendSlice("...");
+                }
+                
+                return .{ .snippet = try snippet.toOwnedSlice(), .position = found_position };
+            }
+        }
+        
+        // No match found, return beginning of conversation
+        const preview_len = @min(200, clean_str.len);
+        return .{ .snippet = try self.allocator.dupe(u8, clean_str[0..preview_len]), .position = 0 };
     }
     
     pub fn deinit(self: *InvertedIndex) void {
@@ -2307,6 +3597,7 @@ const InvertedIndex = struct {
         self.postings.deinit();
         self.conversations_soa.deinit();
         self.allocator.destroy(self.conversations_soa);  // Free the allocated pointer
+        self.allocator.free(self.session_id_map);  // Free session ID map
         self.cache_buffers.deinit();  // Also free cache buffers
     }
 };
@@ -2315,6 +3606,7 @@ const SearchResult = struct {
     conversation_id: u32,
     score: f32,
     snippet: []const u8,
+    position: u32,
     
     fn compareByScore(_: void, a: SearchResult, b: SearchResult) bool {
         return a.score > b.score;
@@ -2589,7 +3881,7 @@ const CLI = struct {
         }
         
         // Build index and search
-        var index = try InvertedIndex.build(self.allocator, conversations.items);
+        var index = try InvertedIndex.build(self.allocator, conversations.items, null);
         defer {
             index.deinit();
             self.allocator.destroy(index);
@@ -2671,6 +3963,20 @@ fn runProtocolMode(allocator: std.mem.Allocator) !void {
     var fs = try FileSystem.init(allocator);
     defer fs.deinit();
     
+    // Initialize database (new backend)
+    const home = std.process.getEnvVarOwned(allocator, "HOME") catch ".";
+    defer if (!std.mem.eql(u8, home, ".")) allocator.free(home);
+    const db_path = try std.fmt.allocPrint(allocator, "{s}/.claude/extractor.db", .{home});
+    defer allocator.free(db_path);
+    
+    var db = try Database.init(allocator, db_path);
+    defer db.deinit();
+    
+    // Initialize incremental importer
+    var importer = try IncrementalImporter.init(allocator, &db);
+    defer importer.deinit();
+    
+    // Keep old index for compatibility (will phase out)
     var current_index: ?*InvertedIndex = null;
     defer if (current_index) |idx| {
         idx.deinit();
@@ -2742,7 +4048,7 @@ fn runProtocolMode(allocator: std.mem.Allocator) !void {
         
         // Route to handler
         if (std.mem.eql(u8, method, "build_index")) {
-            protocolBuildIndex(allocator, &fs, &current_index, id, params, &cancel_flag) catch |err| {
+            protocolBuildIndex(allocator, &fs, &importer, &current_index, id, params, &cancel_flag) catch |err| {
                 try sendError(id, "INTERNAL_ERROR", @errorName(err));
             };
         } else if (std.mem.eql(u8, method, "list_sessions")) {
@@ -2750,11 +4056,11 @@ fn runProtocolMode(allocator: std.mem.Allocator) !void {
                 try sendError(id, "INTERNAL_ERROR", @errorName(err));
             };
         } else if (std.mem.eql(u8, method, "search")) {
-            protocolSearch(allocator, current_index, id, params) catch |err| {
+            protocolSearch(allocator, &db, current_index, id, params) catch |err| {
                 try sendError(id, "INTERNAL_ERROR", @errorName(err));
             };
         } else if (std.mem.eql(u8, method, "extract")) {
-            protocolExtract(allocator, &fs, id, params) catch |err| {
+            protocolExtract(allocator, &fs, &importer, id, params) catch |err| {
                 try sendError(id, "INTERNAL_ERROR", @errorName(err));
             };
         } else if (std.mem.eql(u8, method, "cancel")) {
@@ -2768,37 +4074,50 @@ fn runProtocolMode(allocator: std.mem.Allocator) !void {
 
 fn sendHello() !void {
     const stdout = std.io.getStdOut().writer();
-    try stdout.print(
+    var bw = std.io.bufferedWriter(stdout);
+    const w = bw.writer();
+    try w.print(
         \\{{"type":"hello","core_version":"{s}","protocol":{d},"capabilities":["index","search","extract","list"]}}
     ++ "\n", .{ CoreVersion, ProtocolVersion });
+    try bw.flush();
 }
 
 fn sendEvent(id: []const u8, stage: []const u8, progress: f32) !void {
     const stdout = std.io.getStdOut().writer();
-    try stdout.print(
+    var bw = std.io.bufferedWriter(stdout);
+    const w = bw.writer();
+    try w.print(
         \\{{"id":"{s}","type":"event","stage":"{s}","progress":{d:.2}}}
     ++ "\n", .{ id, stage, progress });
+    try bw.flush();
 }
 
 fn sendResult(id: []const u8, data: std.json.Value) !void {
     const stdout = std.io.getStdOut().writer();
-    try stdout.print(
+    var bw = std.io.bufferedWriter(stdout);
+    const w = bw.writer();
+    try w.print(
         \\{{"id":"{s}","type":"result","data":
     , .{id});
-    try std.json.stringify(data, .{}, stdout);
-    try stdout.print("}}\n", .{});
+    try std.json.stringify(data, .{}, w);
+    try w.print("}}\n", .{});
+    try bw.flush();
 }
 
 fn sendError(id: []const u8, code: []const u8, message: []const u8) !void {
     const stdout = std.io.getStdOut().writer();
-    try stdout.print(
+    var bw = std.io.bufferedWriter(stdout);
+    const w = bw.writer();
+    try w.print(
         \\{{"id":"{s}","type":"error","error":{{"code":"{s}","message":"{s}"}}}}
     ++ "\n", .{ id, code, message });
+    try bw.flush();
 }
 
 fn protocolBuildIndex(
     allocator: std.mem.Allocator,
     fs: *FileSystem,
+    importer: *IncrementalImporter,
     current_index: *?*InvertedIndex,
     id: []const u8,
     params: ?std.json.Value,
@@ -2828,58 +4147,116 @@ fn protocolBuildIndex(
         return;
     }
     
-    try sendEvent(id, "parse", 0.2);
+    try sendEvent(id, "import", 0.2);
     
-    var conversations = std.ArrayList(*Conversation).init(allocator);
-    defer {
-        for (conversations.items) |conv| {
-            allocator.free(conv.id);
-            allocator.free(conv.project_name);
-            allocator.free(conv.file_path);
-            for (conv.messages) |msg| {
-                allocator.free(msg.content);
-            }
-            allocator.free(conv.messages);
-            allocator.destroy(conv);
-        }
-        conversations.deinit();
-    }
-    
-    var parser = try StreamingJSONLParser.init(allocator);
-    defer parser.deinit();
-    
+    // Use new incremental importer for fast indexing
     for (sessions, 0..) |session, i| {
         if (cancel_flag.load(.acquire)) {
             try sendError(id, "CANCELLED", "Operation cancelled");
             return;
         }
         
-        const progress = 0.2 + (0.4 * @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(sessions.len)));
-        try sendEvent(id, "parse", progress);
+        const progress = 0.2 + (0.6 * @as(f32, @floatFromInt(i)) / @as(f32, @floatFromInt(sessions.len)));
+        try sendEvent(id, "import", progress);
         
-        if (parser.parseFile(session)) |conv| {
-            const conv_ptr = try allocator.create(Conversation);
-            conv_ptr.* = conv;
-            try conversations.append(conv_ptr);
-        } else |_| {}
+        // Import file into database (incremental, fast)
+        try importer.importFile(session);
     }
     
-    try sendEvent(id, "index", 0.7);
+    try sendEvent(id, "index", 0.8);
     
-    if (current_index.*) |old_idx| {
-        old_idx.deinit();
-        allocator.destroy(old_idx);
+    // For backward compatibility, still build the old index if needed
+    // This will be phased out in favor of direct DB queries
+    if (sessions.len > 0) {
+        var conversations = std.ArrayList(*Conversation).init(allocator);
+        defer {
+            for (conversations.items) |conv| {
+                allocator.free(conv.id);
+                allocator.free(conv.project_name);
+                allocator.free(conv.file_path);
+                for (conv.messages) |msg| {
+                    allocator.free(msg.content);
+                }
+                allocator.free(conv.messages);
+                allocator.destroy(conv);
+            }
+            conversations.deinit();
+        }
+        
+        // Parse for old index (temporary)
+        var parser = try StreamingJSONLParser.init(allocator);
+        defer parser.deinit();
+        
+        // Keep track of which conversation index maps to which session
+        var conv_to_session_map = std.ArrayList(u32).init(allocator);
+        // NO defer here - we're transferring ownership below
+        
+        // IMPORTANT: We need to map conversation indices to session indices
+        // The conversation array only contains successfully parsed files
+        // But we need to know which session (file) each conversation came from
+        for (sessions, 0..) |session, session_idx| {
+            // Reset parser for each file to avoid arena pollution
+            parser.reset();
+            
+            if (parser.parseFile(session)) |conv| {
+                const conv_ptr = try allocator.create(Conversation);
+                conv_ptr.* = conv;
+                try conversations.append(conv_ptr);
+                // Map this conversation index to its session index
+                try conv_to_session_map.append(@intCast(session_idx));
+            } else |_| {
+                // File failed to parse - don't add to mapping
+            }
+        }
+        
+        // Transfer ownership of the buffer to a slice (no copy, no double-free)
+        const session_id_list = try conv_to_session_map.toOwnedSlice();
+        defer allocator.free(session_id_list); // Free it when we're done
+        
+        // Sanity check: mapping should have exactly as many entries as conversations
+        std.debug.assert(conversations.items.len == session_id_list.len);
+        
+        // Debug: count how many conversations have messages
+        var non_empty_count: usize = 0;
+        for (conversations.items) |conv| {
+            if (conv.message_count > 0) non_empty_count += 1;
+        }
+        
+        // Write debug info to a file
+        if (std.fs.cwd().createFile("parser_debug.txt", .{})) |debug_file| {
+            defer debug_file.close();
+            const writer = debug_file.writer();
+            writer.print("Conversations parsed: {d}\n", .{conversations.items.len}) catch {};
+            writer.print("Non-empty conversations: {d}\n", .{non_empty_count}) catch {};
+            for (conversations.items, 0..) |conv, i| {
+                writer.print("Conv {d}: id={s}, messages={d}, chars={d}\n", .{
+                    i, conv.id, conv.message_count, conv.total_chars
+                }) catch {};
+            }
+        } else |_| {
+            // Couldn't create debug file, continue anyway
+        }
+        
+        if (current_index.*) |old_idx| {
+            old_idx.deinit();
+            allocator.destroy(old_idx);
+        }
+        
+        // InvertedIndex.build now returns a pointer with session IDs
+        current_index.* = try InvertedIndex.build(allocator, conversations.items, session_id_list);
+        
+        std.debug.print("DEBUG: Built index with {} conversations from {} sessions, session map has {} entries\n", .{
+            conversations.items.len, sessions.len, session_id_list.len
+        });
+        
     }
-    
-    // InvertedIndex.build now returns a pointer
-    current_index.* = try InvertedIndex.build(allocator, conversations.items);
     
     try sendEvent(id, "complete", 1.0);
     
     var result = std.StringArrayHashMap(std.json.Value).init(allocator);
     defer result.deinit();
     try result.put("status", .{ .string = "ok" });
-    try result.put("conversations", .{ .integer = @intCast(conversations.items.len) });
+    try result.put("conversations", .{ .integer = @intCast(sessions.len) });
     try sendResult(id, .{ .object = result });
 }
 
@@ -2935,6 +4312,7 @@ fn protocolListSessions(
 
 fn protocolSearch(
     allocator: std.mem.Allocator,
+    _: *Database,
     current_index: ?*InvertedIndex,
     id: []const u8,
     params: ?std.json.Value,
@@ -2975,23 +4353,88 @@ fn protocolSearch(
         try sendResult(id, .{ .object = empty_response });
         return;
     };
+    
     defer {
         for (results) |r| allocator.free(r.snippet);
         allocator.free(results);
     }
     
-    var results_array = std.ArrayList(std.json.Value).init(arena_alloc);
+    // Group results by session and keep the best match for each session
+    var session_results = std.StringHashMap(struct {
+        score: f32,
+        snippet: []const u8,
+        position: u32,
+        match_count: u32,
+    }).init(arena_alloc);
     
-    for (results[0..@min(100, results.len)]) |r| {
-        var obj = std.StringArrayHashMap(std.json.Value).init(arena_alloc);
+    std.debug.print("DEBUG: Found {} raw search results\n", .{results.len});
+    for (results, 0..) |r, i| {
+        // Map conversation ID to session ID
+        const actual_session_id = if (current_index) |idx| blk: {
+            if (r.conversation_id < idx.session_id_map.len) {
+                const mapped = idx.session_id_map[r.conversation_id];
+                if (i < 5) { // Only print first 5 for debugging
+                    std.debug.print("  Result {}: conv_id {} -> session_{}\n", .{i, r.conversation_id, mapped});
+                }
+                break :blk mapped;
+            } else {
+                std.debug.print("WARNING: conversation_id {} out of bounds (map len: {}), defaulting to session_0\n", .{
+                    r.conversation_id, idx.session_id_map.len
+                });
+                break :blk 0; // Default to session_0 if out of bounds
+            }
+        } else r.conversation_id;
         
-        const session_id_str = try std.fmt.allocPrint(arena_alloc, "session_{d}", .{r.conversation_id});
-        try obj.put("session_id", .{ .string = session_id_str });
-        try obj.put("session_name", .{ .string = session_id_str });
-        try obj.put("score", .{ .float = r.score });
-        try obj.put("snippet", .{ .string = r.snippet });
-        try obj.put("position", .{ .integer = @as(i64, 0) }); // TODO: add position tracking
+        const session_id_str = try std.fmt.allocPrint(arena_alloc, "session_{d}", .{actual_session_id});
+        
+        // Update or create session entry (keep the highest scoring snippet)
+        const entry = try session_results.getOrPut(session_id_str);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = .{
+                .score = r.score,
+                .snippet = r.snippet,
+                .position = r.position,
+                .match_count = 1,
+            };
+        } else {
+            // Aggregate: sum scores and increment match count
+            entry.value_ptr.score += r.score;
+            entry.value_ptr.match_count += 1;
+            // Keep the snippet with higher individual score
+            if (r.score > entry.value_ptr.score / @as(f32, @floatFromInt(entry.value_ptr.match_count))) {
+                entry.value_ptr.snippet = r.snippet;
+                entry.value_ptr.position = r.position;
+            }
+        }
+    }
+    
+    // Convert grouped results to array
+    var results_array = std.ArrayList(std.json.Value).init(arena_alloc);
+    var iter = session_results.iterator();
+    while (iter.next()) |entry| {
+        var obj = std.StringArrayHashMap(std.json.Value).init(arena_alloc);
+        try obj.put("session_id", .{ .string = entry.key_ptr.* });
+        try obj.put("session_name", .{ .string = entry.key_ptr.* });
+        try obj.put("score", .{ .float = entry.value_ptr.score });
+        try obj.put("snippet", .{ .string = entry.value_ptr.snippet });
+        try obj.put("position", .{ .integer = @as(i64, @intCast(entry.value_ptr.position)) });
+        try obj.put("match_count", .{ .integer = @as(i64, @intCast(entry.value_ptr.match_count)) });
         try results_array.append(.{ .object = obj });
+    }
+    
+    // Sort by score (highest first) - convert to slice for sorting
+    const results_slice = try results_array.toOwnedSlice();
+    std.sort.insertion(std.json.Value, results_slice, {}, struct {
+        fn lessThan(_: void, a: std.json.Value, b: std.json.Value) bool {
+            const a_score = a.object.get("score").?.float;
+            const b_score = b.object.get("score").?.float;
+            return a_score > b_score; // Descending order
+        }
+    }.lessThan);
+    
+    // Put sorted results back
+    for (results_slice) |item| {
+        try results_array.append(item);
     }
     
     // Wrap in a results object as expected by Flutter
@@ -3003,6 +4446,7 @@ fn protocolSearch(
 fn protocolExtract(
     allocator: std.mem.Allocator,
     fs: *FileSystem,
+    importer: *IncrementalImporter,
     id: []const u8,
     params: ?std.json.Value,
 ) !void {
@@ -3051,40 +4495,122 @@ fn protocolExtract(
         return;
     }
     
-    var parser = try StreamingJSONLParser.init(allocator);
-    defer parser.deinit();
+    // Import the file if not already in database (ensures it's indexed)
+    try importer.importFile(sessions[index]);
     
-    const conversation = try parser.parseFile(sessions[index]);
-    defer {
-        allocator.free(conversation.id);
-        allocator.free(conversation.project_name);
-        allocator.free(conversation.file_path);
-        for (conversation.messages) |msg| {
-            allocator.free(msg.content);
+    // Extract conversation ID from the file path (temporary - should query from DB)
+    // For now, use the file path as a conversation identifier
+    const conv_id = std.fs.path.basename(sessions[index]);
+    
+    // Check for pagination parameters
+    const limit = if (params) |p| blk: {
+        if (p == .object) {
+            if (p.object.get("limit")) |l| {
+                if (l == .integer) break :blk @as(usize, @intCast(l.integer));
+            }
         }
-        allocator.free(conversation.messages);
+        break :blk 0; // 0 means all messages
+    } else 0;
+    
+    const offset = if (params) |p| blk: {
+        if (p == .object) {
+            if (p.object.get("offset")) |o| {
+                if (o == .integer) break :blk @as(usize, @intCast(o.integer));
+            }
+        }
+        break :blk 0;
+    } else 0;
+    
+    // Check if this is a view request (json format without export flag) or export request
+    const is_export = if (params) |p| blk: {
+        if (p == .object) {
+            if (p.object.get("export")) |e| {
+                if (e == .bool) break :blk e.bool;
+            }
+        }
+        break :blk false;
+    } else false;
+    
+    if (std.mem.eql(u8, format_str, "json") and !is_export) {
+        // VIEW mode: Use fast database query with tail overlay
+        var result = std.StringArrayHashMap(std.json.Value).init(allocator);
+        defer result.deinit();
+        
+        // Get messages using the new fast importer with tail overlay
+        const before_position: i64 = if (offset > 0) @as(i64, 999999) else @as(i64, 999999); // High number for newest
+        const messages = try importer.getMessagesWithTailOverlay(
+            conv_id,
+            before_position,
+            if (limit > 0) limit else 50
+        );
+        defer {
+            for (messages) |msg| {
+                allocator.free(msg.content);
+            }
+            allocator.free(messages);
+        }
+        
+        // Add conversation metadata
+        try result.put("id", .{ .string = conv_id });
+        try result.put("project_name", .{ .string = "claude-project" });
+        try result.put("created_at", .{ .integer = std.time.timestamp() });
+        try result.put("updated_at", .{ .integer = std.time.timestamp() });
+        
+        // Add messages array (already fetched with pagination applied)
+        var messages_array = std.ArrayList(std.json.Value).init(allocator);
+        for (messages) |msg| {
+            var msg_obj = std.StringArrayHashMap(std.json.Value).init(allocator);
+            try msg_obj.put("role", .{ .string = @tagName(msg.role) });
+            try msg_obj.put("content", .{ .string = msg.content });
+            if (msg.timestamp) |ts| {
+                try msg_obj.put("timestamp", .{ .integer = @intCast(ts) });
+            } else {
+                try msg_obj.put("timestamp", .{ .null = {} });
+            }
+            try messages_array.append(.{ .object = msg_obj });
+        }
+        try result.put("messages", .{ .array = messages_array });
+        try result.put("total_messages", .{ .integer = @intCast(messages.len) });
+        try result.put("has_more", .{ .bool = messages.len == limit });
+        
+        try sendResult(id, .{ .object = result });
+    } else {
+        // EXPORT mode: For now, parse the file for export (will optimize later)
+        var parser = try StreamingJSONLParser.init(allocator);
+        defer parser.deinit();
+        
+        const conversation = try parser.parseFile(sessions[index]);
+        defer {
+            allocator.free(conversation.id);
+            allocator.free(conversation.project_name);
+            allocator.free(conversation.file_path);
+            for (conversation.messages) |msg| {
+                allocator.free(msg.content);
+            }
+            allocator.free(conversation.messages);
+        }
+        
+        var export_mgr = ExportManager{
+            .allocator = allocator,
+            .output_dir = fs.output_dir,
+        };
+        
+        const format = std.meta.stringToEnum(ExportFormat, format_str) orelse .markdown;
+        const output_path = try export_mgr.generateFilename(&conversation, format);
+        defer allocator.free(output_path);
+        
+        switch (format) {
+            .markdown, .detailed_markdown => try export_mgr.exportMarkdown(&conversation, output_path),
+            .json => try export_mgr.exportJSON(&conversation, output_path),
+            .html => try export_mgr.exportHTML(&conversation, output_path),
+        }
+        
+        var result = std.StringArrayHashMap(std.json.Value).init(allocator);
+        defer result.deinit();
+        try result.put("path", .{ .string = output_path });
+        try result.put("format", .{ .string = format_str });
+        try sendResult(id, .{ .object = result });
     }
-    
-    var export_mgr = ExportManager{
-        .allocator = allocator,
-        .output_dir = fs.output_dir,
-    };
-    
-    const format = std.meta.stringToEnum(ExportFormat, format_str) orelse .markdown;
-    const output_path = try export_mgr.generateFilename(&conversation, format);
-    defer allocator.free(output_path);
-    
-    switch (format) {
-        .markdown, .detailed_markdown => try export_mgr.exportMarkdown(&conversation, output_path),
-        .json => try export_mgr.exportJSON(&conversation, output_path),
-        .html => try export_mgr.exportHTML(&conversation, output_path),
-    }
-    
-    var result = std.StringArrayHashMap(std.json.Value).init(allocator);
-    defer result.deinit();
-    try result.put("path", .{ .string = output_path });
-    try result.put("format", .{ .string = format_str });
-    try sendResult(id, .{ .object = result });
 }
 
 // ================================================================================

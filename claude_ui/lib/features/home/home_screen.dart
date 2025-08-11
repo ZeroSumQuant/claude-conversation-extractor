@@ -71,23 +71,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 ),
               ] else if (coreState.status == CoreStatus.ready) ...[
                 // Main actions
+                // Index is now built automatically on startup
                 _ActionCard(
-                  icon: LucideIcons.folderSync,
-                  title: 'Build Index',
-                  description: 'Scan and index all Claude conversations',
-                  buttonLabel: _isIndexing ? 'Indexing...' : 'Build Index',
-                  onPressed: _isIndexing ? null : _buildIndex,
-                  isPrimary: true,
-                ),
-                const SizedBox(height: Tokens.space4),
-                _ActionCard(
-                  icon: LucideIcons.search,
-                  title: 'Search Conversations',
-                  description: 'Find specific topics across all your chats',
-                  buttonLabel: 'Open Search',
+                  icon: LucideIcons.folderOpen,
+                  title: 'Browse & Search Sessions',
+                  description: 'View all conversations and search across your chats',
+                  buttonLabel: 'Open Sessions',
                   isPrimary: true,
                   onPressed: () {
-                    context.go('/search');
+                    context.go('/sessions');
                   },
                 ),
               ] else if (coreState.status == CoreStatus.connecting) ...[

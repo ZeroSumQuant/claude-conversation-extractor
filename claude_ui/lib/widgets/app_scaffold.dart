@@ -45,11 +45,6 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
       path: '/sessions',
       label: 'Sessions',
       icon: LucideIcons.folderOpen,
-    ),
-    NavigationItem(
-      path: '/search',
-      label: 'Search',
-      icon: LucideIcons.search,
       shortcut: '⌘F',
     ),
     NavigationItem(
@@ -73,7 +68,7 @@ class _AppScaffoldState extends ConsumerState<AppScaffold> {
     return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.keyF, meta: true): () {
-          context.go('/search');
+          context.go('/sessions');
         },
         const SingleActivator(LogicalKeyboardKey.comma, meta: true): () {
           context.go('/settings');
@@ -385,17 +380,9 @@ class _CommandPaletteState extends State<CommandPalette> {
                     },
                   ),
                   _CommandItem(
-                    icon: LucideIcons.search,
-                    label: 'Search Conversations',
-                    shortcut: '⌘F',
-                    onTap: () {
-                      Navigator.of(context).pop();
-                      context.go('/search');
-                    },
-                  ),
-                  _CommandItem(
                     icon: LucideIcons.folderOpen,
-                    label: 'Browse Sessions',
+                    label: 'Browse & Search Sessions',
+                    shortcut: '⌘F',
                     onTap: () {
                       Navigator.of(context).pop();
                       context.go('/sessions');

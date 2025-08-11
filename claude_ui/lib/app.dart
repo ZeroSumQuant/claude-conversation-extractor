@@ -6,7 +6,6 @@ import 'theme/theme.dart';
 import 'widgets/app_scaffold.dart';
 import 'features/home/home_screen.dart';
 import 'features/sessions/sessions_screen.dart';
-import 'features/search/search_screen.dart';
 import 'features/settings/settings_screen.dart';
 import 'features/conversation/conversation_screen.dart';
 
@@ -27,21 +26,39 @@ final _router = GoRouter(
         GoRoute(
           path: '/sessions',
           builder: (context, state) => const SessionsScreen(),
-        ),
-        GoRoute(
-          path: '/search',
-          builder: (context, state) => const SearchScreen(),
+          routes: [
+            GoRoute(
+              path: 'conversation/:id',
+              pageBuilder: (context, state) {
+                final id = state.pathParameters['id']!;
+                final highlight = state.uri.queryParameters['highlight'];
+                final position = state.uri.queryParameters['position'];
+                return CustomTransitionPage(
+                  key: state.pageKey,
+                  child: ConversationScreen(
+                    sessionId: id,
+                    highlightQuery: highlight,
+                    jumpToPosition: position != null ? int.tryParse(position) : null,
+                  ),
+                  transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                    return SlideTransition(
+                      position: animation.drive(
+                        Tween(
+                          begin: const Offset(1.0, 0.0),
+                          end: Offset.zero,
+                        ).chain(CurveTween(curve: Curves.easeOutCubic)),
+                      ),
+                      child: child,
+                    );
+                  },
+                );
+              },
+            ),
+          ],
         ),
         GoRoute(
           path: '/settings',
           builder: (context, state) => const SettingsScreen(),
-        ),
-        GoRoute(
-          path: '/conversation/:id',
-          builder: (context, state) {
-            final id = state.pathParameters['id']!;
-            return ConversationScreen(sessionId: id);
-          },
         ),
       ],
     ),
