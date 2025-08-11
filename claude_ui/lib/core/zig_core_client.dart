@@ -161,23 +161,35 @@ class ZigCoreClient extends StateNotifier<CoreState> {
       }
     }
 
-    // In production, check bundled assets
+    // In production on macOS, the extractor is in the app bundle
+    if (Platform.isMacOS && !kDebugMode) {
+      // Get the bundle path
+      final bundlePath = Platform.resolvedExecutable;
+      final bundleDir = File(bundlePath).parent.path;
+      final extractorPath = '$bundleDir/extractor';
+      
+      if (await File(extractorPath).exists()) {
+        // Ensure it's executable
+        await Process.run('chmod', ['+x', extractorPath]);
+        return extractorPath;
+      }
+    }
+
+    // For other platforms, check bundled assets
     final platforms = {
-      'macos': 'assets/zig-core/macos/extractor',
       'windows': 'assets/zig-core/windows/extractor.exe',
       'linux': 'assets/zig-core/linux/extractor',
     };
 
     String? platform;
-    if (Platform.isMacOS) platform = 'macos';
-    else if (Platform.isWindows) platform = 'windows';
+    if (Platform.isWindows) platform = 'windows';
     else if (Platform.isLinux) platform = 'linux';
 
     if (platform != null) {
       final path = platforms[platform]!;
       if (await File(path).exists()) {
         // Make executable on Unix platforms
-        if (Platform.isMacOS || Platform.isLinux) {
+        if (Platform.isLinux) {
           await Process.run('chmod', ['+x', path]);
         }
         return path;

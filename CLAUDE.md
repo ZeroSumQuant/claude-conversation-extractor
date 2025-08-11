@@ -1,5 +1,38 @@
 # Claude Conversation Extractor - Project Context
 
+## ⚠️ CRITICAL: WORKING EXTRACTOR BINARY
+
+**THE ONLY WORKING EXTRACTOR**: 
+- **File**: `./extractor` (in project root)
+- **Size**: 502K (513,640 bytes)
+- **Date**: Aug 10 15:36
+- **Version**: Shows as 2.0.0 but this is the WORKING version
+- **SHA256**: `9ae3e44f534671e7ed648dc4b4f83e64feccf0fc1e53c16bc2e065b477d80cab`
+
+**DO NOT USE**:
+- `zig-out/bin/extractor` (539K) - BROKEN - doesn't import messages
+- Any newly built version - Has transaction/BlockIndex bugs
+
+**To deploy to app**:
+```bash
+# ALWAYS use the working extractor from project root
+cp ./extractor claude_ui/macos/extractor
+cp ./extractor claude_ui/build/macos/Build/Products/Release/claude_ui.app/Contents/MacOS/
+```
+
+**What works with this version**:
+- ✅ Imports and displays all messages correctly
+- ✅ Exports to Markdown/JSON/HTML
+- ✅ Basic search functionality
+- ✅ Session listing and navigation
+- ✅ No database errors
+
+**Known issues with newer builds**:
+- BlockIndex updates before import completes
+- Foreign key constraint failures
+- Transaction rollback errors
+- Imports 0 messages despite processing files
+
 ## Project Overview
 
 This is a standalone tool that extracts Claude Code conversations from the

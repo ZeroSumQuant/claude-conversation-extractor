@@ -36,13 +36,14 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
   @override
   void initState() {
     super.initState();
-    // Load initial messages immediately for instant display
-    _loadInitialMessages().then((_) {
+    // Start loading messages immediately for instant display
+    // Use microtask to ensure build completes first for smoother transition
+    Future.microtask(() => _loadInitialMessages().then((_) {
       // After messages load, jump to position if specified
       if (widget.jumpToPosition != null && _messages.isNotEmpty) {
         _jumpToMessage(widget.jumpToPosition!);
       }
-    });
+    }));
   }
   
   void _jumpToMessage(int position) {
@@ -272,8 +273,18 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
 
   Widget _buildContent(ThemeData theme) {
     if (_isLoading) {
-      return const Center(
-        child: CircularProgressIndicator(),
+      // Show loading skeleton instead of spinner for smoother transition
+      return Container(
+        color: theme.brightness == Brightness.light 
+            ? Colors.grey.shade50 
+            : theme.colorScheme.surfaceContainerLowest,
+        child: ListView.builder(
+          padding: const EdgeInsets.symmetric(vertical: Tokens.space4),
+          itemCount: 5, // Show 5 skeleton messages
+          itemBuilder: (context, index) {
+            return _buildSkeletonMessage(theme, index % 2 == 0);
+          },
+        ),
       );
     }
 
@@ -376,6 +387,73 @@ class _ConversationScreenState extends ConsumerState<ConversationScreen> {
   List<Map<String, dynamic>> _extractMessages() {
     // Use the already loaded messages list
     return _messages;
+  }
+  
+  Widget _buildSkeletonMessage(ThemeData theme, bool isUser) {
+    return Container(
+      color: isUser 
+          ? Colors.transparent
+          : (theme.brightness == Brightness.light 
+              ? Colors.white 
+              : theme.colorScheme.surfaceContainer),
+      child: Container(
+        constraints: const BoxConstraints(maxWidth: 900),
+        margin: EdgeInsets.symmetric(
+          horizontal: MediaQuery.of(context).size.width > 900 
+              ? (MediaQuery.of(context).size.width - 900) / 2 
+              : Tokens.space4,
+        ),
+        padding: EdgeInsets.symmetric(
+          horizontal: Tokens.space4,
+          vertical: isUser ? Tokens.space4 : Tokens.space5,
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Avatar skeleton
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+                borderRadius: BorderRadius.circular(6),
+              ),
+            ),
+            const SizedBox(width: Tokens.space4),
+            // Content skeleton
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Title skeleton
+                  Container(
+                    width: 60,
+                    height: 14,
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                  const SizedBox(height: Tokens.space2),
+                  // Content lines skeleton
+                  ...List.generate(isUser ? 2 : 4, (i) => Padding(
+                    padding: EdgeInsets.only(bottom: i < (isUser ? 1 : 3) ? 8.0 : 0),
+                    child: Container(
+                      width: i == (isUser ? 1 : 3) ? 200 : double.infinity,
+                      height: 14,
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                  )),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 
