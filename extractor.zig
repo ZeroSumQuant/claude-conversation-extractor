@@ -820,6 +820,77 @@ pub const Database = struct {
         return map;
     }
     
+    // Search result structure for database queries
+    pub const DatabaseSearchResult = struct {
+        conversation_id: []const u8,
+        score: f32,
+        snippet: []const u8,
+        message_count: u32,
+        total_chars: u32,
+    };
+    
+    // Fast FTS5 search using database
+    pub fn search(self: *Self, query: []const u8) ![]DatabaseSearchResult {
+        const sql = 
+            \\SELECT DISTINCT
+            \\  m.conversation_id,
+            \\  1.0 as score,
+            \\  SUBSTR(m.content, 1, 200) as snippet,
+            \\  c.message_count,
+            \\  c.total_chars
+            \\FROM messages_fts
+            \\JOIN messages m ON messages_fts.rowid = m.id  
+            \\JOIN conversations c ON m.conversation_id = c.id
+            \\WHERE messages_fts MATCH ?
+            \\ORDER BY m.conversation_id
+            \\LIMIT 50
+        ;
+        
+        var stmt: ?*sqlite.sqlite3_stmt = null;
+        defer _ = sqlite.sqlite3_finalize(stmt);
+        
+        const sql_z = try self.allocator.dupeZ(u8, sql);
+        defer self.allocator.free(sql_z);
+        
+        if (sqlite.sqlite3_prepare_v2(self.db, sql_z, -1, &stmt, null) != sqlite.SQLITE_OK) {
+            std.debug.print("SQL Error: {s}\n", .{sqlite.sqlite3_errmsg(self.db)});
+            return error.PrepareStatementFailed;
+        }
+        
+        const query_z = try self.allocator.dupeZ(u8, query);
+        defer self.allocator.free(query_z);
+        _ = sqlite.sqlite3_bind_text(stmt, 1, query_z, @intCast(query.len), sqlite.SQLITE_STATIC);
+        
+        var results = std.ArrayList(DatabaseSearchResult).init(self.allocator);
+        
+        while (sqlite.sqlite3_step(stmt) == sqlite.SQLITE_ROW) {
+            const conversation_id = std.mem.span(sqlite.sqlite3_column_text(stmt, 0));
+            const score = @as(f32, @floatCast(sqlite.sqlite3_column_double(stmt, 1)));
+            const snippet = std.mem.span(sqlite.sqlite3_column_text(stmt, 2));
+            const message_count = @as(u32, @intCast(sqlite.sqlite3_column_int(stmt, 3)));
+            const total_chars = @as(u32, @intCast(sqlite.sqlite3_column_int(stmt, 4)));
+            
+            try results.append(DatabaseSearchResult{
+                .conversation_id = try self.allocator.dupe(u8, conversation_id),
+                .score = score,
+                .snippet = try self.allocator.dupe(u8, snippet),
+                .message_count = message_count,
+                .total_chars = total_chars,
+            });
+        }
+        
+        return results.toOwnedSlice();
+    }
+    
+    // Free search results
+    pub fn freeSearchResults(self: *Self, results: []DatabaseSearchResult) void {
+        for (results) |result| {
+            self.allocator.free(result.conversation_id);
+            self.allocator.free(result.snippet);
+        }
+        self.allocator.free(results);
+    }
+
     pub fn deinit(self: *Self) void {
         if (self.insert_message_stmt) |stmt| _ = sqlite.sqlite3_finalize(stmt);
         if (self.get_messages_stmt) |stmt| _ = sqlite.sqlite3_finalize(stmt);
@@ -872,8 +943,10 @@ pub const IncrementalImporter = struct {
             break :blk bi;
         };
         
-        // Update block index incrementally
-        try block_idx.appendIncremental(mapped_file);
+        // DO NOT update block index here - we need to import first!
+        // Save the starting point for import
+        const start_byte = block_idx.header.last_byte;
+        const start_lines = block_idx.header.total_lines;
         
         // Get source file record
         const file = try std.fs.openFileAbsolute(path, .{});
@@ -885,27 +958,69 @@ pub const IncrementalImporter = struct {
         try self.db.beginTransaction();
         defer self.db.rollback() catch {};
         
+        // Ensure conversation exists in database
+        const file_basename = std.fs.path.basename(path);
+        const conv_id_no_ext = if (std.mem.endsWith(u8, file_basename, ".jsonl"))
+            file_basename[0..file_basename.len - 6]
+        else
+            file_basename;
+        
+        // Insert conversation if it doesn't exist
+        const conv_sql = 
+            \\INSERT OR IGNORE INTO conversations (id, display_title, created_at, updated_at)
+            \\VALUES (?, ?, ?, ?)
+        ;
+        var conv_stmt: ?*sqlite.sqlite3_stmt = null;
+        if (sqlite.sqlite3_prepare_v2(self.db.db, conv_sql, -1, &conv_stmt, null) == sqlite.SQLITE_OK) {
+            defer _ = sqlite.sqlite3_finalize(conv_stmt);
+            _ = sqlite.sqlite3_bind_text(conv_stmt, 1, conv_id_no_ext.ptr, @intCast(conv_id_no_ext.len), sqlite.SQLITE_STATIC);
+            _ = sqlite.sqlite3_bind_text(conv_stmt, 2, conv_id_no_ext.ptr, @intCast(conv_id_no_ext.len), sqlite.SQLITE_STATIC);
+            _ = sqlite.sqlite3_bind_int64(conv_stmt, 3, @intCast(@divTrunc(mapped_file.mtime_ns, 1_000_000)));
+            _ = sqlite.sqlite3_bind_int64(conv_stmt, 4, @intCast(@divTrunc(mapped_file.mtime_ns, 1_000_000)));
+            _ = sqlite.sqlite3_step(conv_stmt);
+        }
+        
         // Import new lines since last_byte
-        var line_no = block_idx.header.total_lines;
-        var iter = mapped_file.findLines(block_idx.header.last_byte, mapped_file.size);
+        var line_no = start_lines;
+        var iter = mapped_file.findLines(start_byte, mapped_file.size);
         
         var batch_count: usize = 0;
         const batch_size = 5000;
         
+        var total_messages: usize = 0;
+        var lines_processed: usize = 0;
+        var parse_errors: usize = 0;
         while (iter.next()) |line| {
+            lines_processed += 1;
             // Parse JSON line
             const parsed = std.json.parseFromSlice(
                 std.json.Value,
                 self.allocator,
                 line.content,
                 .{ .allocate = .alloc_always }
-            ) catch continue;
+            ) catch {
+                parse_errors += 1;
+                if (lines_processed <= 5) {
+                    std.debug.print("    JSON parse error on line {}: {s}\n", .{line_no, line.content[0..@min(100, line.content.len)]});
+                }
+                continue;
+            };
             defer parsed.deinit();
             
             // Extract conversation info
             const conv_id = self.extractConversationId(parsed.value, path) catch continue;
-            const role = self.extractRole(parsed.value) catch continue;
-            const content = self.extractContent(parsed.value) catch continue;
+            const role = self.extractRole(parsed.value) catch |err| {
+                if (lines_processed <= 5) {
+                    std.debug.print("    Failed to extract role on line {}: {} - JSON: {s}\n", .{line_no, err, line.content[0..@min(200, line.content.len)]});
+                }
+                continue;
+            };
+            const content = self.extractContent(parsed.value) catch |err| {
+                if (lines_processed <= 5) {
+                    std.debug.print("    Failed to extract content for role {s} on line {}: {} - JSON: {s}\n", .{role, line_no, err, line.content[0..@min(200, line.content.len)]});
+                }
+                continue;
+            };
             const timestamp = self.extractTimestamp(parsed.value);
             
             // Get or increment position for this conversation
@@ -939,6 +1054,7 @@ pub const IncrementalImporter = struct {
                 continue; // Skip on constraint violation (duplicate)
             }
             
+            total_messages += 1;
             line_no += 1;
             batch_count += 1;
             
@@ -962,6 +1078,11 @@ pub const IncrementalImporter = struct {
         
         // Final commit
         try self.db.commit();
+        
+        // NOW that we've successfully imported, update the block index
+        try block_idx.appendIncremental(mapped_file);
+        
+        std.debug.print("  Imported {} messages from {s} (processed {} lines, {} parse errors)\n", .{total_messages, std.fs.path.basename(path), lines_processed, parse_errors});
     }
     
     fn extractConversationId(self: *Self, value: std.json.Value, file_path: []const u8) ![]const u8 {
@@ -982,15 +1103,41 @@ pub const IncrementalImporter = struct {
     fn extractRole(self: *Self, value: std.json.Value) ![]const u8 {
         _ = self;
         if (value != .object) return error.InvalidJson;
-        const role = value.object.get("type") orelse return error.MissingField;
-        if (role != .string) return error.InvalidType;
-        return role.string;
+        
+        // Check if this is a message type (user/assistant/system)
+        const type_field = value.object.get("type") orelse return error.MissingField;
+        if (type_field != .string) return error.InvalidType;
+        
+        const type_str = type_field.string;
+        // Only process actual messages
+        if (!std.mem.eql(u8, type_str, "user") and 
+            !std.mem.eql(u8, type_str, "assistant") and 
+            !std.mem.eql(u8, type_str, "system")) {
+            return error.NotAMessage;
+        }
+        
+        // The actual role is in message.role
+        if (value.object.get("message")) |msg| {
+            if (msg == .object) {
+                if (msg.object.get("role")) |role| {
+                    if (role == .string) return role.string;
+                }
+            }
+        }
+        
+        // Fallback to type as role
+        return type_str;
     }
     
     fn extractContent(self: *Self, value: std.json.Value) ![]const u8 {
         _ = self;
         if (value != .object) return error.InvalidJson;
-        const content = value.object.get("content") orelse return error.MissingField;
+        
+        // Content is in message.content
+        const msg = value.object.get("message") orelse return error.MissingField;
+        if (msg != .object) return error.InvalidType;
+        
+        const content = msg.object.get("content") orelse return error.MissingField;
         
         switch (content) {
             .string => return content.string,
@@ -1015,6 +1162,12 @@ pub const IncrementalImporter = struct {
         switch (ts) {
             .integer => return ts.integer,
             .float => return @intFromFloat(ts.float),
+            .string => {
+                // Parse ISO 8601 timestamp like "2025-08-09T01:33:37.599Z"
+                // For now, just return current timestamp as fallback
+                // TODO: Implement proper ISO 8601 parsing
+                return std.time.timestamp();
+            },
             else => return null,
         }
     }
@@ -3668,6 +3821,8 @@ const SearchResult = struct {
 const CLI = struct {
     allocator: std.mem.Allocator,
     fs: FileSystem,
+    db: *Database,
+    importer: *IncrementalImporter,
     
     pub fn run(allocator: std.mem.Allocator) !void {
         // Allocate CLI on heap to avoid stack overflow with optimizations
@@ -3676,9 +3831,23 @@ const CLI = struct {
         
         const fs = try FileSystem.init(allocator);
         
+        // Initialize database
+        const home = std.process.getEnvVarOwned(allocator, "HOME") catch ".";
+        defer if (!std.mem.eql(u8, home, ".")) allocator.free(home);
+        const db_path = try std.fmt.allocPrint(allocator, "{s}/.claude/extractor.db", .{home});
+        defer allocator.free(db_path);
+        
+        var db = try Database.init(allocator, db_path);
+        defer db.deinit();
+        
+        var importer = try IncrementalImporter.init(allocator, &db);
+        defer importer.deinit();
+        
         cli_ptr.* = CLI{
             .allocator = allocator,
             .fs = fs,
+            .db = &db,
+            .importer = &importer,
         };
         defer cli_ptr.fs.deinit();
         
@@ -3818,11 +3987,84 @@ const CLI = struct {
         
         std.debug.print("📄 Extracting session {d}...\n", .{index + 1});
         
-        var parser = try JSONLParser.init(self.allocator);
-        defer parser.deinit();
+        const start_time = std.time.nanoTimestamp();
         
-        const conversation = try parser.parseFile(sessions[index]);
-        defer self.freeConversation(&conversation);
+        // Get conversation ID from filename
+        const file_path = sessions[index];
+        const file_basename = std.fs.path.basename(file_path);
+        const conv_id = if (std.mem.endsWith(u8, file_basename, ".jsonl"))
+            file_basename[0..file_basename.len - 6]
+        else if (std.mem.endsWith(u8, file_basename, ".jso"))
+            file_basename[0..file_basename.len - 4]  // Remove .jso extension
+        else
+            file_basename;
+        
+        std.debug.print("🔍 Looking for conversation ID: {s}\n", .{conv_id});
+        
+        // Get all messages from database (limit to a reasonable number)
+        const db_start = std.time.nanoTimestamp();
+        const messages = try self.importer.getMessagesWithTailOverlay(conv_id, 999999, 10000);
+        const db_end = std.time.nanoTimestamp();
+        defer {
+            for (messages) |msg| {
+                self.allocator.free(msg.content);
+            }
+            self.allocator.free(messages);
+        }
+        
+        if (messages.len == 0) {
+            std.debug.print("❌ No messages found for session {d}. Database may not be populated.\n", .{index + 1});
+            return;
+        }
+        
+        // Create conversation from database messages
+        const conversation = Conversation{
+            .id = try self.allocator.dupe(u8, conv_id),
+            .project_name = try self.allocator.dupe(u8, "claude-project"),
+            .messages = messages,
+            .created_at = if (messages.len > 0 and messages[0].timestamp != null) messages[0].timestamp.? else std.time.timestamp(),
+            .updated_at = if (messages.len > 0 and messages[messages.len - 1].timestamp != null) messages[messages.len - 1].timestamp.? else std.time.timestamp(),
+            .file_path = try self.allocator.dupe(u8, file_path),
+            .message_count = messages.len,
+            .user_message_count = blk: {
+                var count: usize = 0;
+                for (messages) |msg| {
+                    if (msg.role == .user) count += 1;
+                }
+                break :blk count;
+            },
+            .assistant_message_count = blk: {
+                var count: usize = 0;
+                for (messages) |msg| {
+                    if (msg.role == .assistant) count += 1;
+                }
+                break :blk count;
+            },
+            .total_chars = blk: {
+                var count: usize = 0;
+                for (messages) |msg| {
+                    count += msg.content.len;
+                }
+                break :blk count;
+            },
+            .estimated_tokens = blk: {
+                // Rough estimate: 1 token per 4 characters
+                const total_chars = blk2: {
+                    var count: usize = 0;
+                    for (messages) |msg| {
+                        count += msg.content.len;
+                    }
+                    break :blk2 count;
+                };
+                break :blk @divFloor(total_chars, 4);
+            },
+        };
+        defer {
+            self.allocator.free(conversation.id);
+            self.allocator.free(conversation.project_name);
+            self.allocator.free(conversation.file_path);
+            // Don't free messages array itself as it's moved to conversation
+        }
         
         var export_manager = ExportManager{
             .allocator = self.allocator,
@@ -3832,13 +4074,24 @@ const CLI = struct {
         const output_path = try export_manager.generateFilename(&conversation, format);
         defer self.allocator.free(output_path);
         
+        const export_start = std.time.nanoTimestamp();
         switch (format) {
             .markdown, .detailed_markdown => try export_manager.exportMarkdown(&conversation, output_path),
             .json => try export_manager.exportJSON(&conversation, output_path),
             .html => try export_manager.exportHTML(&conversation, output_path),
         }
+        const export_end = std.time.nanoTimestamp();
         
-        std.debug.print("✅ Exported to: {s}\n", .{output_path});
+        const total_time = export_end - start_time;
+        const db_time = db_end - db_start;
+        const export_time = export_end - export_start;
+        
+        std.debug.print("✅ Exported {d} messages to: {s}\n", .{ messages.len, output_path });
+        std.debug.print("⚡ Performance: DB query: {d:.2}ms, Export: {d:.2}ms, Total: {d:.2}ms\n", .{
+            @as(f64, @floatFromInt(db_time)) / 1_000_000.0,
+            @as(f64, @floatFromInt(export_time)) / 1_000_000.0,
+            @as(f64, @floatFromInt(total_time)) / 1_000_000.0,
+        });
     }
     
     fn extractAllSessions(self: *CLI, format: ExportFormat) !void {
@@ -3889,74 +4142,58 @@ const CLI = struct {
     fn searchConversations(self: *CLI, query: []const u8) !void {
         std.debug.print("🔍 Searching for: {s}\n", .{query});
         
-        // Load all conversations
-        const sessions = try self.fs.findSessions(null);
-        defer {
-            for (sessions) |session| {
-                self.allocator.free(session);
-            }
-            self.allocator.free(sessions);
-        }
+        const start_time = std.time.nanoTimestamp();
         
-        var parser = try JSONLParser.init(self.allocator);
-        defer parser.deinit();
+        // Use fast database FTS5 search
+        const results = self.db.search(query) catch |err| {
+            std.debug.print("❌ Search failed: {any}\n", .{err});
+            return;
+        };
+        defer self.db.freeSearchResults(results);
         
-        var conversations = std.ArrayList(*Conversation).init(self.allocator);
-        defer {
-            for (conversations.items) |conv| {
-                self.freeConversation(conv);
-                self.allocator.destroy(conv);
-            }
-            conversations.deinit();
-        }
+        const search_time = std.time.nanoTimestamp() - start_time;
         
-        for (sessions) |session| {
-            if (parser.parseFile(session)) |conv| {
-                const conv_ptr = try self.allocator.create(Conversation);
-                conv_ptr.* = conv;
-                try conversations.append(conv_ptr);
-            } else |_| {}
-        }
-        
-        if (conversations.items.len == 0) {
-            std.debug.print("No conversations found.\n", .{});
+        if (results.len == 0) {
+            std.debug.print("No conversations found matching '{s}'.\n", .{query});
             return;
         }
         
-        // Build index and search
-        var index = try InvertedIndex.build(self.allocator, conversations.items, null);
-        defer {
-            index.deinit();
-            self.allocator.destroy(index);
-        }
-        
-        const results = try index.search(query);
-        defer {
-            for (results) |result| {
-                self.allocator.free(result.snippet);
-            }
-            self.allocator.free(results);
-        }
-        
-        std.debug.print("\n📊 Found {d} matching conversations:\n\n", .{results.len});
+        std.debug.print("\n📊 Found {d} matching conversations:\n", .{results.len});
+        std.debug.print("⚡ Search completed in {d:.2}ms\n\n", .{@as(f32, @floatFromInt(search_time)) / 1_000_000});
         
         for (results[0..@min(10, results.len)], 0..) |result, i| {
-            const proj_name = index.conversations_soa.project_names[result.conversation_id];
-            const msg_count = index.conversations_soa.message_counts[result.conversation_id];
-            const chars = index.conversations_soa.total_chars[result.conversation_id];
-            
-            std.debug.print("{d}. {s} (score: {d:.2})\n", .{
+            std.debug.print("{d}. Conversation {s} (score: {d:.2})\n", .{
                 i + 1,
-                proj_name,
+                result.conversation_id[0..8], // Show first 8 chars of conversation ID
                 result.score,
             });
             std.debug.print("   Messages: {d}, Characters: {d}\n", .{
-                msg_count,
-                chars,
+                result.message_count,
+                result.total_chars,
             });
-            std.debug.print("   Snippet: {s}...\n\n", .{
-                if (result.snippet.len > 100) result.snippet[0..100] else result.snippet,
-            });
+            
+            // Clean up HTML markup from snippet for console display
+            var clean_snippet = std.ArrayList(u8).init(self.allocator);
+            defer clean_snippet.deinit();
+            
+            var i_char: usize = 0;
+            while (i_char < result.snippet.len) {
+                if (i_char + 6 < result.snippet.len and std.mem.eql(u8, result.snippet[i_char..i_char+6], "<mark>")) {
+                    i_char += 6; // Skip <mark>
+                } else if (i_char + 7 < result.snippet.len and std.mem.eql(u8, result.snippet[i_char..i_char+7], "</mark>")) {
+                    i_char += 7; // Skip </mark>
+                } else {
+                    try clean_snippet.append(result.snippet[i_char]);
+                    i_char += 1;
+                }
+            }
+            
+            const display_snippet = if (clean_snippet.items.len > 200) 
+                clean_snippet.items[0..200] 
+            else 
+                clean_snippet.items;
+            
+            std.debug.print("   Snippet: {s}...\n\n", .{display_snippet});
         }
         
         if (results.len > 10) {

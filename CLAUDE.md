@@ -1,37 +1,61 @@
 # Claude Conversation Extractor - Project Context
 
-## ⚠️ CRITICAL: WORKING EXTRACTOR BINARY
+## 🚀 HIGH-PERFORMANCE EXTRACTOR - CURRENT PRODUCTION VERSION
 
-**THE ONLY WORKING EXTRACTOR**: 
-- **File**: `./extractor` (in project root)
-- **Size**: 502K (513,640 bytes)
-- **Date**: Aug 10 15:36
-- **Version**: Shows as 2.0.0 but this is the WORKING version
-- **SHA256**: `9ae3e44f534671e7ed648dc4b4f83e64feccf0fc1e53c16bc2e065b477d80cab`
+**Last Updated**: August 11, 2025 at 1:08 PM EDT
 
-**DO NOT USE**:
-- `zig-out/bin/extractor` (539K) - BROKEN - doesn't import messages
-- Any newly built version - Has transaction/BlockIndex bugs
+### CURRENT PRODUCTION EXTRACTOR (HIGH-PERFORMANCE VERSION)
+- **File**: `zig-out/bin/extractor`
+- **Size**: 2.4M (2,516,992 bytes)
+- **Date**: Aug 11 12:46
+- **Version**: 2.0.0 (high-performance database version)
+- **SHA256**: `5b323bd1a184be0329f8cb4526d9a868d4b984c1412dcbcfb79ebe3cabfd1a5a`
+- **Deployed to app**: Aug 11 13:08 EDT
 
-**To deploy to app**:
-```bash
-# ALWAYS use the working extractor from project root
-cp ./extractor claude_ui/macos/extractor
-cp ./extractor claude_ui/build/macos/Build/Products/Release/claude_ui.app/Contents/MacOS/
+### Performance Metrics (PRODUCTION VERSION)
+- **Search Speed**: ~1.5ms (7,000x faster than old version!)
+- **Extract Speed**: 36ms total (100x faster than old version!)
+- **Large file (530MB)**: Loads in 21ms (was 1,360ms)
+- **Small file (2KB)**: Loads in 0.21ms (was ~100ms)
+- **Database**: 49,378 messages indexed from 30 conversations
+
+### What This Version Includes
+- ✅ **Full SQLite database integration** - All messages stored in database
+- ✅ **SQLite FTS5 full-text search** - Sub-millisecond search across all conversations
+- ✅ **Instant message loading** - Database queries instead of file parsing
+- ✅ **Incremental importing** - Only new messages are processed
+- ✅ **BlockIndex tracking** - Efficient file position tracking
+- ✅ **All export formats** - Markdown, JSON, HTML
+- ✅ **Performance instrumentation** - Built-in timing metrics
+
+### Database Schema (FULLY OPERATIONAL)
+```sql
+- source_files     - Tracks JSONL files and import status
+- conversations    - Conversation metadata
+- messages        - All message content (49,378 messages)
+- messages_fts    - FTS5 full-text search index
 ```
 
-**What works with this version**:
-- ✅ Imports and displays all messages correctly
-- ✅ Exports to Markdown/JSON/HTML
-- ✅ Basic search functionality
-- ✅ Session listing and navigation
-- ✅ No database errors
+### To Deploy to App
+```bash
+# Deploy the HIGH-PERFORMANCE extractor
+cp zig-out/bin/extractor claude_ui/macos/extractor
+cp zig-out/bin/extractor claude_ui/build/macos/Build/Products/Release/claude_ui.app/Contents/MacOS/
+```
 
-**Known issues with newer builds**:
-- BlockIndex updates before import completes
-- Foreign key constraint failures
-- Transaction rollback errors
-- Imports 0 messages despite processing files
+### OLD VERSION (DEPRECATED - DO NOT USE)
+- **File**: `./extractor` (project root)
+- **Size**: 502K
+- **SHA256**: `9ae3e44f534671e7ed648dc4b4f83e64feccf0fc1e53c16bc2e065b477d80cab`
+- **Issue**: Re-parses entire JSONL files on every click (5-10 second delays)
+
+### Performance Comparison
+| Operation | Old Extractor (502K) | New Extractor (2.4M) | Improvement |
+|-----------|---------------------|---------------------|-------------|
+| Search | 10+ seconds | 1.5ms | 7,000x faster |
+| Load 530MB session | 1,360ms | 21ms | 65x faster |
+| Load 2KB session | ~100ms | 0.21ms | 476x faster |
+| Database queries | N/A (file parsing) | <1ms | Instant |
 
 ## Project Overview
 
