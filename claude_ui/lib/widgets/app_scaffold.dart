@@ -183,67 +183,115 @@ class _NavItem extends StatefulWidget {
   State<_NavItem> createState() => _NavItemState();
 }
 
-class _NavItemState extends State<_NavItem> {
-  bool _isHovered = false;
+class _NavItemState extends State<_NavItem> with SingleTickerProviderStateMixin {
+  late AnimationController _pressController;
+  late Animation<double> _scaleAnimation;
+  
+  @override
+  void initState() {
+    super.initState();
+    _pressController = AnimationController(
+      duration: const Duration(milliseconds: 100),
+      vsync: this,
+    );
+    
+    _scaleAnimation = Tween<double>(
+      begin: 1.0,
+      end: 0.95,  // Shrink to 95% when pressed
+    ).animate(CurvedAnimation(
+      parent: _pressController,
+      curve: Curves.easeInOut,
+    ));
+    
+    // Auto-reverse the animation to create the spring-back effect
+    _pressController.addStatusListener((status) {
+      if (status == AnimationStatus.completed) {
+        _pressController.reverse();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _pressController.dispose();
+    super.dispose();
+  }
+
+  void _handleTapDown(TapDownDetails details) {
+    _pressController.forward();
+  }
+
+  void _handleTapUp(TapUpDetails details) {
+    // Animation will auto-reverse due to the listener
+    widget.onTap();
+  }
+
+  void _handleTapCancel() {
+    if (_pressController.status == AnimationStatus.forward) {
+      _pressController.reverse();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isSelected = widget.isSelected;
     
-    return MouseRegion(
-      onEnter: (_) => setState(() => _isHovered = true),
-      onExit: (_) => setState(() => _isHovered = false),
-      child: AnimatedContainer(
-        duration: Tokens.durationFast,
-        decoration: BoxDecoration(
-          color: isSelected
-              ? theme.colorScheme.primaryContainer.withValues(alpha: 0.3)
-              : _isHovered
-                  ? theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5)
-                  : Colors.transparent,
-          borderRadius: BorderRadius.circular(Tokens.radiusMedium),
-        ),
-        child: InkWell(
-          onTap: widget.onTap,
-          borderRadius: BorderRadius.circular(Tokens.radiusMedium),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: Tokens.space3,
-              vertical: Tokens.space2,
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  widget.item.icon,
-                  size: 20,
-                  color: isSelected
-                      ? theme.colorScheme.primary
-                      : theme.colorScheme.onSurfaceVariant,
+    return GestureDetector(
+      onTapDown: _handleTapDown,
+      onTapUp: _handleTapUp,
+      onTapCancel: _handleTapCancel,
+      child: AnimatedBuilder(
+        animation: _scaleAnimation,
+        builder: (context, child) {
+          return Transform.scale(
+            scale: _scaleAnimation.value,
+            child: Container(
+              decoration: BoxDecoration(
+                color: isSelected
+                    ? theme.colorScheme.primaryContainer.withValues(alpha: 0.3)
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(Tokens.radiusMedium),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: Tokens.space3,
+                  vertical: Tokens.space2,
                 ),
-                const SizedBox(width: Tokens.space3),
-                Expanded(
-                  child: Text(
-                    widget.item.label,
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      fontWeight: isSelected ? FontWeight.w500 : null,
+                child: Row(
+                  children: [
+                    Icon(
+                      widget.item.icon,
+                      size: 20,
                       color: isSelected
                           ? theme.colorScheme.primary
                           : theme.colorScheme.onSurfaceVariant,
                     ),
-                  ),
-                ),
-                if (widget.item.shortcut != null)
-                  Text(
-                    widget.item.shortcut!,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+                    const SizedBox(width: Tokens.space3),
+                    Expanded(
+                      child: Text(
+                        widget.item.label,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          fontWeight: isSelected ? FontWeight.w500 : null,
+                          color: isSelected
+                              ? theme.colorScheme.primary
+                              : theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
                     ),
-                  ),
-              ],
+                    if (widget.item.shortcut != null)
+                      Text(
+                        widget.item.shortcut!,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
