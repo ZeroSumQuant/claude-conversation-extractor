@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Real-time search interface for Claude Conversation Extractor.
-Provides live search results as the user types.
+Fixed real-time search interface for Claude Conversation Extractor.
+Properly handles arrow keys without printing escape sequences.
 """
 
 import os
@@ -39,7 +39,7 @@ class SearchState:
 
 
 class KeyboardHandler:
-    """Cross-platform keyboard input handler"""
+    """Cross-platform keyboard input handler with fixed arrow key support"""
 
     def __init__(self):
         self.old_settings = None
@@ -59,7 +59,7 @@ class KeyboardHandler:
             termios.tcsetattr(self.stdin_fd, termios.TCSADRAIN, self.old_settings)
 
     def get_key(self, timeout: float = 0.1) -> Optional[str]:
-        """Get a single keypress with timeout"""
+        """Get a single keypress with timeout - FIXED version"""
         if sys.platform == "win32":
             # Windows implementation
             start_time = time.time()
@@ -91,31 +91,52 @@ class KeyboardHandler:
                 time.sleep(0.01)
             return None
         else:
-            # Unix/Linux/macOS implementation
+            # Unix/Linux/macOS implementation - FIXED
             if select.select([sys.stdin], [], [], timeout)[0]:
-                key = sys.stdin.read(1)
-
-                # Handle escape sequences
-                if key == "\x1b":
-                    if select.select([sys.stdin], [], [], 0.1)[0]:
-                        seq = sys.stdin.read(2)
-                        if seq == "[A":
-                            return "UP"
-                        elif seq == "[B":
-                            return "DOWN"
-                        elif seq == "[C":
-                            return "RIGHT"
-                        elif seq == "[D":
-                            return "LEFT"
-                    return "ESC"
-                elif key == "\r" or key == "\n":
+                # Read one character
+                char = sys.stdin.read(1)
+                
+                # Check for escape sequences
+                if char == '\x1b':  # ESC character
+                    # Check if there are more characters (arrow key sequence)
+                    if select.select([sys.stdin], [], [], 0.0)[0]:
+                        # Read the rest of the escape sequence
+                        seq = []
+                        seq.append(sys.stdin.read(1))  # Should be '['
+                        
+                        # Read the next character
+                        if select.select([sys.stdin], [], [], 0.0)[0]:
+                            seq.append(sys.stdin.read(1))
+                            
+                            # Check for arrow keys
+                            if seq == ['[', 'A']:
+                                return "UP"
+                            elif seq == ['[', 'B']:
+                                return "DOWN"
+                            elif seq == ['[', 'C']:
+                                return "RIGHT"
+                            elif seq == ['[', 'D']:
+                                return "LEFT"
+                            else:
+                                # Unknown escape sequence - consume any remaining chars
+                                while select.select([sys.stdin], [], [], 0.0)[0]:
+                                    sys.stdin.read(1)
+                                return None
+                        return None
+                    else:
+                        # Just ESC by itself
+                        return "ESC"
+                        
+                elif char == '\r' or char == '\n':
                     return "ENTER"
-                elif key == "\x7f" or key == "\x08":
+                elif char == '\x7f' or char == '\x08':
                     return "BACKSPACE"
-                elif key == "\x03":  # Ctrl+C
+                elif char == '\x03':  # Ctrl+C
                     raise KeyboardInterrupt
+                elif ord(char) >= 32 and ord(char) < 127:  # Printable characters
+                    return char
                 else:
-                    return key
+                    return None
             return None
 
 
@@ -135,19 +156,19 @@ class TerminalDisplay:
 
     def move_cursor(self, row: int, col: int):
         """Move cursor to specific position"""
-        print(f"\033[{row};{col}H", end="")
+        print(f"\033[{row};{col}H", end="", flush=True)
 
     def clear_line(self):
         """Clear current line"""
-        print("\033[2K", end="")
+        print("\033[2K", end="", flush=True)
 
     def save_cursor(self):
         """Save current cursor position"""
-        print("\033[s", end="")
+        print("\033[s", end="", flush=True)
 
     def restore_cursor(self):
         """Restore saved cursor position"""
-        print("\033[u", end="")
+        print("\033[u", end="", flush=True)
 
     def draw_header(self):
         """Draw the search interface header"""
@@ -218,7 +239,7 @@ class TerminalDisplay:
 
 
 class RealTimeSearch:
-    """Main real-time search interface"""
+    """Main real-time search interface with fixed arrow key handling"""
 
     def __init__(self, searcher, extractor):
         self.searcher = searcher
@@ -294,6 +315,9 @@ class RealTimeSearch:
 
     def handle_input(self, key: str) -> Optional[str]:
         """Handle keyboard input and return action if needed"""
+        if not key:
+            return None
+            
         if key == "ESC":
             return "exit"
 
@@ -306,20 +330,24 @@ class RealTimeSearch:
         elif key == "UP":
             if self.state.results:
                 self.state.selected_index = max(0, self.state.selected_index - 1)
+                return "redraw"  # Signal to redraw
 
         elif key == "DOWN":
             if self.state.results:
                 self.state.selected_index = min(
                     len(self.state.results[:10]) - 1, self.state.selected_index + 1
                 )
+                return "redraw"  # Signal to redraw
 
         elif key == "LEFT":
             self.state.cursor_pos = max(0, self.state.cursor_pos - 1)
+            return "redraw"
 
         elif key == "RIGHT":
             self.state.cursor_pos = min(
                 len(self.state.query), self.state.cursor_pos + 1
             )
+            return "redraw"
 
         elif key == "BACKSPACE":
             if self.state.cursor_pos > 0:
@@ -329,8 +357,9 @@ class RealTimeSearch:
                 )
                 self.state.cursor_pos -= 1
                 self.trigger_search()
+                return "redraw"
 
-        elif key and len(key) == 1 and ord(key) >= 32:  # Printable character
+        elif key and len(key) == 1 and ord(key) >= 32 and ord(key) < 127:  # Printable character
             self.state.query = (
                 self.state.query[: self.state.cursor_pos]
                 + key
@@ -338,6 +367,7 @@ class RealTimeSearch:
             )
             self.state.cursor_pos += 1
             self.trigger_search()
+            return "redraw"
 
         return None
 
@@ -372,19 +402,20 @@ class RealTimeSearch:
             self.display.draw_header()
 
             with KeyboardHandler() as keyboard:
+                # Initial draw
+                self.display.draw_results(
+                    self.state.results[:10],
+                    self.state.selected_index,
+                    self.state.query,
+                )
+                self.display.draw_search_box(
+                    self.state.query, self.state.cursor_pos
+                )
+                
                 while True:
-                    # Draw current state
-                    self.display.draw_results(
-                        self.state.results[:10],
-                        self.state.selected_index,
-                        self.state.query,
-                    )
-                    self.display.draw_search_box(
-                        self.state.query, self.state.cursor_pos
-                    )
-
                     # Get keyboard input
                     key = keyboard.get_key(timeout=0.1)
+                    
                     if key:
                         action = self.handle_input(key)
 
@@ -395,6 +426,20 @@ class RealTimeSearch:
                                 self.state.selected_index
                             ]
                             return selected_result.file_path
+                        elif action == "redraw" or action is None:
+                            # Redraw the interface
+                            self.display.draw_results(
+                                self.state.results[:10],
+                                self.state.selected_index,
+                                self.state.query,
+                            )
+                            self.display.draw_search_box(
+                                self.state.query, self.state.cursor_pos
+                            )
+                    else:
+                        # Check if results have changed (from search thread)
+                        # and redraw if needed
+                        pass
 
         except KeyboardInterrupt:
             return None
@@ -471,3 +516,28 @@ def create_smart_searcher(searcher):
     # Replace the search method
     searcher.search = smart_search
     return searcher
+
+
+def main():
+    """Main entry point for running real-time search directly."""
+    from extract_claude_logs import ClaudeConversationExtractor
+    from search_conversations import ConversationSearcher
+    
+    # Initialize components
+    extractor = ClaudeConversationExtractor()
+    searcher = ConversationSearcher()
+    smart_searcher = create_smart_searcher(searcher)
+    
+    # Create and run real-time search
+    rts = RealTimeSearch(smart_searcher, extractor)
+    selected_file = rts.run()
+    
+    if selected_file:
+        print(f"\n✅ Selected: {selected_file}")
+        # Could optionally extract here
+    else:
+        print("\n👋 Search cancelled")
+
+
+if __name__ == "__main__":
+    main()

@@ -5,6 +5,34 @@ All notable changes to the Claude Code export tool will be documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2025-08-28 - View Conversations & Better Search Experience
+
+### Added
+- **Conversation Viewer** - View conversations directly in terminal without extracting files
+- **JSON export format** - Export conversations as structured JSON with metadata (Issue #6)
+- **HTML export format** - Beautiful web-viewable format with syntax highlighting (Issue #6)
+- **--format flag** - Choose between markdown, json, or html output formats
+- **--detailed flag** - Include tool use, MCP responses, and system messages (Issue #19)
+- **claude-search command** - Search and view conversations without extraction
+- Complete transcript export showing all conversation details as in Ctrl+R view
+- Pagination support for viewing long conversations
+
+### Fixed
+- Fixed missing `claude-logs` command in PyPI package (Issue #31)
+- Fixed arrow key handling in real-time search (no more weird characters)
+- Fixed search functionality to VIEW conversations instead of forcing extraction
+- All search commands now allow viewing before optional extraction
+- All three commands now work properly: `claude-extract`, `claude-logs`, `claude-start`
+- Updated documentation to clarify `claude-start` vs `claude-extract` usage
+
+### Changed
+- `claude-start` launches interactive UI with ASCII art logo and real-time search
+- `claude-extract` runs standard CLI interface
+- `claude-search` now offers view/extract options instead of auto-extracting
+- Interactive UI search (option F) now views conversations instead of extracting
+- `--search` flag now allows viewing conversations before extraction
+- Simplified README with clear command distinctions at the top
+
 ## [Unreleased] - Features to Export Claude Code Conversations
 
 ### Planned

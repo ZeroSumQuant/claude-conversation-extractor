@@ -41,7 +41,7 @@ source ~/.zshrc  # or ~/.bash_profile for older macOS
 pipx install claude-conversation-extractor
 
 # Now you can export Claude Code logs:
-claude-logs
+claude-extract
 ```
 
 #### Method 2: Using pip with venv (Alternative Claude Export Method)
@@ -55,7 +55,7 @@ source claude-export-env/bin/activate
 pip install claude-conversation-extractor
 
 # Create alias to export Claude conversations easily
-echo 'alias claude-logs="source ~/claude-export-env/bin/activate && claude-logs"' >> ~/.zshrc
+echo 'alias claude-extract="source ~/claude-export-env/bin/activate && claude-extract"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
@@ -108,14 +108,14 @@ pipx install claude-conversation-extractor
 
 #### Common Windows Issues Exporting Claude Code
 
-**"'claude-logs' is not recognized" when trying to export Claude conversations**
+**"'claude-extract' is not recognized" when trying to export Claude conversations**
 1. Add Python Scripts to PATH:
    ```batch
    REM Replace YourUsername with actual username
    setx PATH "%PATH%;C:\Users\YourUsername\AppData\Local\Programs\Python\Python311\Scripts"
    ```
 2. Restart Command Prompt
-3. Try `claude-logs` again to export Claude Code logs
+3. Try `claude-extract` again to export Claude Code logs
 
 **"Access denied" when installing Claude export tool**
 - Run as Administrator
@@ -138,7 +138,7 @@ source ~/.bashrc
 pipx install claude-conversation-extractor
 
 # Export Claude logs:
-claude-logs
+claude-extract
 ```
 
 #### Fedora/RHEL - Extract Claude Conversations
@@ -202,9 +202,9 @@ dir %USERPROFILE%\.claude\projects\
 
 The Claude export tool uses commands, not Python imports:
 ```bash
-claude-logs           # Main command to export Claude conversations
-claude-logs --help    # Show all export options
-claude-logs --list    # List all Claude Code conversations
+claude-extract           # Main command to export Claude conversations
+claude-extract --help    # Show all export options
+claude-extract --list    # List all Claude Code conversations
 ```
 
 ### Python Version Issues for Claude Export
@@ -274,18 +274,18 @@ After installing the Claude Code export tool:
 
 ```bash
 # Check if Claude export command exists
-which claude-logs  # macOS/Linux
-where claude-logs  # Windows
+which claude-extract  # macOS/Linux
+where claude-extract  # Windows
 
 # Test Claude Conversation Extractor
-claude-logs --version
-claude-logs --help
+claude-extract --version
+claude-extract --help
 
 # List your Claude Code conversations
-claude-logs --list
+claude-extract --list
 
 # Export recent Claude sessions
-claude-logs --recent 5
+claude-extract --recent 5
 ```
 
 If you see your Claude conversations listed, the export tool is working!
@@ -307,11 +307,11 @@ Include these details when reporting Claude export problems:
 ## Quick Reference - Claude Export Commands
 
 After installation, these commands export Claude Code conversations:
-- `claude-logs` - Interactive UI to export Claude conversations (recommended)
-- `claude-logs search` - Search and export specific Claude chats
-- `claude-logs --all` - Export all Claude Code conversations at once
-- `claude-logs --recent 10` - Export last 10 Claude sessions
-- `claude-extract` - Legacy command (same functionality)
+- `claude-extract` - Interactive UI to export Claude conversations (recommended)
+- `claude-search` - Real-time search across all Claude conversations
+- `claude-extract --all` - Export all Claude Code conversations at once
+- `claude-extract --recent 10` - Export last 10 Claude sessions
+- `claude-start` - Alias for claude-extract (same functionality)
 
 ---
 
