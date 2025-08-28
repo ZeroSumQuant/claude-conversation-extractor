@@ -542,6 +542,44 @@ class ClaudeConversationExtractor:
             print(f"❌ Unsupported format: {format}")
             return None
 
+    def get_conversation_preview(self, session_path: Path) -> Tuple[str, int]:
+        """Get a preview of the conversation's first message and message count."""
+        try:
+            first_user_msg = ""
+            msg_count = 0
+            
+            with open(session_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    msg_count += 1
+                    if not first_user_msg:
+                        try:
+                            data = json.loads(line)
+                            # Check for user message
+                            if data.get("type") == "user" and "message" in data:
+                                msg = data["message"]
+                                if msg.get("role") == "user":
+                                    content = msg.get("content", "")
+                                    if isinstance(content, str):
+                                        # Clean up command tags and get actual content
+                                        import re
+                                        content = re.sub(r'<[^>]+>', '', content).strip()
+                                        if content and not content.startswith('/'):
+                                            first_user_msg = content[:100].replace('\n', ' ')
+                                    elif isinstance(content, list):
+                                        for item in content:
+                                            if isinstance(item, dict) and item.get("type") == "text":
+                                                text = item.get("text", "")
+                                                text = re.sub(r'<[^>]+>', '', text).strip()
+                                                if text and not text.startswith('/'):
+                                                    first_user_msg = text[:100].replace('\n', ' ')
+                                                    break
+                        except json.JSONDecodeError:
+                            continue
+                            
+            return first_user_msg or "No preview available", msg_count
+        except Exception as e:
+            return f"Error: {str(e)[:30]}", 0
+
     def list_recent_sessions(self, limit: int = None) -> List[Path]:
         """List recent sessions with details."""
         sessions = self.find_sessions()
@@ -552,24 +590,35 @@ class ClaudeConversationExtractor:
             return []
 
         print(f"\n📚 Found {len(sessions)} Claude sessions:\n")
+        print("=" * 80)
 
         # Show all sessions if no limit specified
         sessions_to_show = sessions[:limit] if limit else sessions
         for i, session in enumerate(sessions_to_show, 1):
-            project = session.parent.name
+            # Clean up project name (remove hyphens, make readable)
+            project = session.parent.name.replace('-', ' ').strip()
+            if project.startswith("Users"):
+                project = "~/" + "/".join(project.split()[2:]) if len(project.split()) > 2 else "Home"
+            
             session_id = session.stem
             modified = datetime.fromtimestamp(session.stat().st_mtime)
 
             # Get file size
             size = session.stat().st_size
             size_kb = size / 1024
+            
+            # Get preview and message count
+            preview, msg_count = self.get_conversation_preview(session)
 
-            print(f"{i + 1}. {project}")
-            print(f"   Session: {session_id[:8]}...")
-            print(f"   Modified: {modified.strftime('%Y-%m-%d %H:%M')}")
-            print(f"   Size: {size_kb:.1f} KB")
-            print()
+            # Print formatted info
+            print(f"\n{i}. 📁 {project}")
+            print(f"   📄 Session: {session_id[:8]}...")
+            print(f"   📅 Modified: {modified.strftime('%Y-%m-%d %H:%M')}")
+            print(f"   💬 Messages: {msg_count}")
+            print(f"   💾 Size: {size_kb:.1f} KB")
+            print(f"   📝 Preview: \"{preview}...\"")
 
+        print("\n" + "=" * 80)
         return sessions[:limit]
 
     def extract_multiple(
