@@ -543,7 +543,7 @@ class ClaudeConversationExtractor:
             return None
 
     def get_conversation_preview(self, session_path: Path) -> Tuple[str, int]:
-        """Get a preview of the conversation's first message and message count."""
+        """Get a preview of the conversation's first real user message and message count."""
         try:
             first_user_msg = ""
             msg_count = 0
@@ -562,15 +562,44 @@ class ClaudeConversationExtractor:
                                     if isinstance(content, str):
                                         # Clean up command tags and get actual content
                                         import re
+                                        # Remove XML-like tags
                                         content = re.sub(r'<[^>]+>', '', content).strip()
-                                        if content and not content.startswith('/'):
+                                        
+                                        # Skip if it's a command output or system message
+                                        skip_patterns = [
+                                            r'^[a-zA-Z0-9_-]+ is running',  # "xyz is running..."
+                                            r'^/[a-zA-Z]',  # Commands starting with /
+                                            r'^\[.*\]$',  # System messages in brackets
+                                            r'^Caveat:',  # System caveats
+                                            r'^Error:',  # Error messages
+                                            r'^Note:',  # System notes
+                                            r'DO NOT respond'  # System instructions
+                                        ]
+                                        
+                                        # Check if content matches any skip pattern
+                                        should_skip = any(re.match(pattern, content) for pattern in skip_patterns)
+                                        
+                                        # Only use this as preview if it's real user content
+                                        if content and not should_skip and len(content) > 10:
                                             first_user_msg = content[:100].replace('\n', ' ')
                                     elif isinstance(content, list):
                                         for item in content:
                                             if isinstance(item, dict) and item.get("type") == "text":
                                                 text = item.get("text", "")
                                                 text = re.sub(r'<[^>]+>', '', text).strip()
-                                                if text and not text.startswith('/'):
+                                                
+                                                # Apply same skip patterns
+                                                should_skip = any(re.match(pattern, text) for pattern in [
+                                                    r'^[a-zA-Z0-9_-]+ is running',
+                                                    r'^/[a-zA-Z]',
+                                                    r'^\[.*\]$',
+                                                    r'^Caveat:',
+                                                    r'^Error:',
+                                                    r'^Note:',
+                                                    r'DO NOT respond'
+                                                ])
+                                                
+                                                if text and not should_skip and len(text) > 10:
                                                     first_user_msg = text[:100].replace('\n', ' ')
                                                     break
                         except json.JSONDecodeError:
