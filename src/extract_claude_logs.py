@@ -542,7 +542,7 @@ class ClaudeConversationExtractor:
             print(f"❌ Unsupported format: {format}")
             return None
 
-    def list_recent_sessions(self, limit: int = 10) -> List[Path]:
+    def list_recent_sessions(self, limit: int = None) -> List[Path]:
         """List recent sessions with details."""
         sessions = self.find_sessions()
 
@@ -553,7 +553,9 @@ class ClaudeConversationExtractor:
 
         print(f"\n📚 Found {len(sessions)} Claude sessions:\n")
 
-        for i, session in enumerate(sessions[:limit]):
+        # Show all sessions if no limit specified
+        sessions_to_show = sessions[:limit] if limit else sessions
+        for i, session in enumerate(sessions_to_show, 1):
             project = session.parent.name
             session_id = session.stem
             modified = datetime.fromtimestamp(session.stat().st_mtime)
@@ -640,7 +642,7 @@ Examples:
         "--output", type=str, help="Output directory for markdown files"
     )
     parser.add_argument(
-        "--limit", type=int, help="Limit for --list command", default=10
+        "--limit", type=int, help="Limit for --list command (default: show all)", default=None
     )
     parser.add_argument(
         "--interactive",
