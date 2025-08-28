@@ -71,3 +71,27 @@ test-output/
 # Local testing
 test_conversations/
 local_tests/
+test_*.py
+
+# Database and cache files
+*.db
+*.db-shm
+*.db-wal
+claude_extractor.db*
+
+# Build artifacts
+*.o
+*.dylib
+*.so
+*.log
+
+# Development files
+*.patch
+bandit_report.json
+demo_*.py
+RELEASE_NOTES_*.md
+PR_BODY.md
+
+# Cache directories
+.zig-cache/
+claude_ui/

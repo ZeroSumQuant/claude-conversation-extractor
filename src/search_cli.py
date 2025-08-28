@@ -5,9 +5,17 @@ This is used when running `claude-search` from the command line.
 """
 
 import sys
-from search_conversations import ConversationSearcher
-from realtime_search import create_smart_searcher
-from extract_claude_logs import ClaudeConversationExtractor
+
+# Handle both package and direct execution imports
+try:
+    from .search_conversations import ConversationSearcher
+    from .realtime_search import create_smart_searcher
+    from .extract_claude_logs import ClaudeConversationExtractor
+except ImportError:
+    # Fallback for direct execution or when not installed as package
+    from search_conversations import ConversationSearcher
+    from realtime_search import create_smart_searcher
+    from extract_claude_logs import ClaudeConversationExtractor
 
 
 def main():

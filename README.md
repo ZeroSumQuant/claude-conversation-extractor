@@ -289,7 +289,7 @@ python -m spacy download en_core_web_sm
 
 ## 🤝 Contributing
 
-Help make the best Claude Code export tool even better! See [CONTRIBUTING.md](CONTRIBUTING.md).
+Help make the best Claude Code export tool even better! See [CONTRIBUTING.md](docs/development/CONTRIBUTING.md).
 
 ### Development Setup
 ```bash
@@ -322,7 +322,7 @@ pytest
 - Ensure you're running the tool as the same user who uses Claude Code
 
 ### Installation issues?
-See [INSTALL.md](INSTALL.md) for:
+See [INSTALL.md](docs/user/INSTALL.md) for:
 - Fixing "externally managed environment" errors
 - PATH configuration help
 - Platform-specific troubleshooting

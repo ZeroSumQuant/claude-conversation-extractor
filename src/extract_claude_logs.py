@@ -875,13 +875,20 @@ def launch_interactive():
     
     # If no arguments provided, launch interactive UI
     if len(sys.argv) == 1:
-        from interactive_ui import main as interactive_main
+        try:
+            from .interactive_ui import main as interactive_main
+        except ImportError:
+            from interactive_ui import main as interactive_main
         interactive_main()
     # Check if 'search' was passed as an argument
     elif len(sys.argv) > 1 and sys.argv[1] == 'search':
         # Launch real-time search with viewing capability
-        from realtime_search import RealTimeSearch, create_smart_searcher
-        from search_conversations import ConversationSearcher
+        try:
+            from .realtime_search import RealTimeSearch, create_smart_searcher
+            from .search_conversations import ConversationSearcher
+        except ImportError:
+            from realtime_search import RealTimeSearch, create_smart_searcher
+            from search_conversations import ConversationSearcher
         
         # Initialize components
         extractor = ClaudeConversationExtractor()

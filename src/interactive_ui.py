@@ -9,9 +9,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from extract_claude_logs import ClaudeConversationExtractor
-from realtime_search import RealTimeSearch, create_smart_searcher
-from search_conversations import ConversationSearcher
+# Handle both package and direct execution imports
+try:
+    from .extract_claude_logs import ClaudeConversationExtractor
+    from .realtime_search import RealTimeSearch, create_smart_searcher
+    from .search_conversations import ConversationSearcher
+except ImportError:
+    # Fallback for direct execution or when not installed as package
+    from extract_claude_logs import ClaudeConversationExtractor
+    from realtime_search import RealTimeSearch, create_smart_searcher
+    from search_conversations import ConversationSearcher
 
 
 class InteractiveUI:

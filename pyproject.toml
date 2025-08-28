@@ -57,7 +57,9 @@ claude-search = "search_cli:main"
 [tool.setuptools]
 py-modules = ["extract_claude_logs", "interactive_ui", "search_conversations", "realtime_search", "search_cli"]
 
+[tool.setuptools.package-dir]
+"" = "src"
+
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["extract_claude_logs*"]
+where = ["src"]
 exclude = ["tests*"]

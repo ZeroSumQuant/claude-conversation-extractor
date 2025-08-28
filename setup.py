@@ -74,6 +74,7 @@ setup(
         "Environment :: Console",
     ],
     python_requires=">=3.8",
+    package_dir={"": "src"},
     py_modules=[
         "extract_claude_logs",
         "interactive_ui",
