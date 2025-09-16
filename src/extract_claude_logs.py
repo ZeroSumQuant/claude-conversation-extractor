@@ -559,49 +559,64 @@ class ClaudeConversationExtractor:
                                 msg = data["message"]
                                 if msg.get("role") == "user":
                                     content = msg.get("content", "")
-                                    if isinstance(content, str):
-                                        # Clean up command tags and get actual content
+                                    
+                                    # Handle list content (common format in Claude JSONL)
+                                    if isinstance(content, list):
+                                        for item in content:
+                                            if isinstance(item, dict) and item.get("type") == "text":
+                                                text = item.get("text", "").strip()
+                                                
+                                                # Skip tool results
+                                                if text.startswith("tool_use_id"):
+                                                    continue
+                                                
+                                                # Skip interruption messages
+                                                if "[Request interrupted" in text:
+                                                    continue
+                                                
+                                                # Skip Claude's session continuation messages
+                                                if "session is being continued" in text.lower():
+                                                    continue
+                                                
+                                                # Remove XML-like tags (command messages, etc)
+                                                import re
+                                                text = re.sub(r'<[^>]+>', '', text).strip()
+                                                
+                                                # Skip command outputs  
+                                                if "is running" in text and "…" in text:
+                                                    continue
+                                                
+                                                # Handle image references - extract text after them
+                                                if text.startswith("[Image #"):
+                                                    parts = text.split("]", 1)
+                                                    if len(parts) > 1:
+                                                        text = parts[1].strip()
+                                                
+                                                # If we have real user text, use it
+                                                if text and len(text) > 3:  # Lower threshold to catch "hello"
+                                                    first_user_msg = text[:100].replace('\n', ' ')
+                                                    break
+                                    
+                                    # Handle string content (less common but possible)
+                                    elif isinstance(content, str):
                                         import re
+                                        content = content.strip()
+                                        
                                         # Remove XML-like tags
                                         content = re.sub(r'<[^>]+>', '', content).strip()
                                         
-                                        # Skip if it's a command output or system message
-                                        skip_patterns = [
-                                            r'^[a-zA-Z0-9_-]+ is running',  # "xyz is running..."
-                                            r'^/[a-zA-Z]',  # Commands starting with /
-                                            r'^\[.*\]$',  # System messages in brackets
-                                            r'^Caveat:',  # System caveats
-                                            r'^Error:',  # Error messages
-                                            r'^Note:',  # System notes
-                                            r'DO NOT respond'  # System instructions
-                                        ]
+                                        # Skip command outputs
+                                        if "is running" in content and "…" in content:
+                                            continue
                                         
-                                        # Check if content matches any skip pattern
-                                        should_skip = any(re.match(pattern, content) for pattern in skip_patterns)
+                                        # Skip Claude's session continuation messages
+                                        if "session is being continued" in content.lower():
+                                            continue
                                         
-                                        # Only use this as preview if it's real user content
-                                        if content and not should_skip and len(content) > 10:
-                                            first_user_msg = content[:100].replace('\n', ' ')
-                                    elif isinstance(content, list):
-                                        for item in content:
-                                            if isinstance(item, dict) and item.get("type") == "text":
-                                                text = item.get("text", "")
-                                                text = re.sub(r'<[^>]+>', '', text).strip()
-                                                
-                                                # Apply same skip patterns
-                                                should_skip = any(re.match(pattern, text) for pattern in [
-                                                    r'^[a-zA-Z0-9_-]+ is running',
-                                                    r'^/[a-zA-Z]',
-                                                    r'^\[.*\]$',
-                                                    r'^Caveat:',
-                                                    r'^Error:',
-                                                    r'^Note:',
-                                                    r'DO NOT respond'
-                                                ])
-                                                
-                                                if text and not should_skip and len(text) > 10:
-                                                    first_user_msg = text[:100].replace('\n', ' ')
-                                                    break
+                                        # Skip tool results and interruptions
+                                        if not content.startswith("tool_use_id") and "[Request interrupted" not in content:
+                                            if content and len(content) > 3:  # Lower threshold to catch short messages
+                                                first_user_msg = content[:100].replace('\n', ' ')
                         except json.JSONDecodeError:
                             continue
                             
