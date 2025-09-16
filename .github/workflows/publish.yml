@@ -37,7 +37,7 @@ jobs:
       continue-on-error: true
     
     - name: Publish to PyPI
-      if: github.event_name == 'release'
+      if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
       env:
         TWINE_USERNAME: __token__
         TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
