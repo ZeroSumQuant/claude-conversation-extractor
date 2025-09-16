@@ -35,7 +35,7 @@ long_description = (this_directory / "README.md").read_text(encoding="utf-8")
 
 setup(
     name="claude-conversation-extractor",
-    version="1.1.1",
+    version="1.1.2",
     author="Dustin Kirby",
     author_email="",  # Contact via GitHub
     description=(
