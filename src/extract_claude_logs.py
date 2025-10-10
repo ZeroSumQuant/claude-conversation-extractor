@@ -285,7 +285,7 @@ class ClaudeConversationExtractor:
             input("\nPress Enter to continue...")
 
     def save_as_markdown(
-        self, conversation: List[Dict[str, str]], session_id: str
+        self, conversation: List[Dict[str, str]], session_id: str, project_name: str = ""
     ) -> Optional[Path]:
         """Save conversation as clean markdown file."""
         if not conversation:
@@ -306,7 +306,12 @@ class ClaudeConversationExtractor:
             date_str = datetime.now().strftime("%Y-%m-%d")
             time_str = ""
 
-        filename = f"claude-conversation-{date_str}-{session_id[:8]}.md"
+        # Clean project name for filename (use full path)
+        clean_project = project_name.replace('/', '-').replace('\\', '-').replace(' ', '-') if project_name else ""
+        if clean_project:
+            filename = f"claude-conversation-{clean_project}-{date_str}-{session_id[:8]}.md"
+        else:
+            filename = f"claude-conversation-{date_str}-{session_id[:8]}.md"
         output_path = self.output_dir / filename
 
         with open(output_path, "w", encoding="utf-8") as f:
@@ -344,7 +349,7 @@ class ClaudeConversationExtractor:
         return output_path
     
     def save_as_json(
-        self, conversation: List[Dict[str, str]], session_id: str
+        self, conversation: List[Dict[str, str]], session_id: str, project_name: str = ""
     ) -> Optional[Path]:
         """Save conversation as JSON file."""
         if not conversation:
@@ -361,7 +366,12 @@ class ClaudeConversationExtractor:
         else:
             date_str = datetime.now().strftime("%Y-%m-%d")
 
-        filename = f"claude-conversation-{date_str}-{session_id[:8]}.json"
+        # Clean project name for filename (use full path)
+        clean_project = project_name.replace('/', '-').replace('\\', '-').replace(' ', '-') if project_name else ""
+        if clean_project:
+            filename = f"claude-conversation-{clean_project}-{date_str}-{session_id[:8]}.json"
+        else:
+            filename = f"claude-conversation-{date_str}-{session_id[:8]}.json"
         output_path = self.output_dir / filename
 
         # Create JSON structure
@@ -378,7 +388,7 @@ class ClaudeConversationExtractor:
         return output_path
     
     def save_as_html(
-        self, conversation: List[Dict[str, str]], session_id: str
+        self, conversation: List[Dict[str, str]], session_id: str, project_name: str = ""
     ) -> Optional[Path]:
         """Save conversation as HTML file with syntax highlighting."""
         if not conversation:
@@ -398,7 +408,12 @@ class ClaudeConversationExtractor:
             date_str = datetime.now().strftime("%Y-%m-%d")
             time_str = ""
 
-        filename = f"claude-conversation-{date_str}-{session_id[:8]}.html"
+        # Clean project name for filename (use full path)
+        clean_project = project_name.replace('/', '-').replace('\\', '-').replace(' ', '-') if project_name else ""
+        if clean_project:
+            filename = f"claude-conversation-{clean_project}-{date_str}-{session_id[:8]}.html"
+        else:
+            filename = f"claude-conversation-{date_str}-{session_id[:8]}.html"
         output_path = self.output_dir / filename
 
         # HTML template with modern styling
@@ -523,21 +538,22 @@ class ClaudeConversationExtractor:
         return output_path
 
     def save_conversation(
-        self, conversation: List[Dict[str, str]], session_id: str, format: str = "markdown"
+        self, conversation: List[Dict[str, str]], session_id: str, format: str = "markdown", project_name: str = ""
     ) -> Optional[Path]:
         """Save conversation in the specified format.
-        
+
         Args:
             conversation: The conversation data
             session_id: Session identifier
             format: Output format ('markdown', 'json', 'html')
+            project_name: Project name to include in filename and content
         """
         if format == "markdown":
-            return self.save_as_markdown(conversation, session_id)
+            return self.save_as_markdown(conversation, session_id, project_name)
         elif format == "json":
-            return self.save_as_json(conversation, session_id)
+            return self.save_as_json(conversation, session_id, project_name)
         elif format == "html":
-            return self.save_as_html(conversation, session_id)
+            return self.save_as_html(conversation, session_id, project_name)
         else:
             print(f"❌ Unsupported format: {format}")
             return None
@@ -666,11 +682,11 @@ class ClaudeConversationExtractor:
         return sessions[:limit]
 
     def extract_multiple(
-        self, sessions: List[Path], indices: List[int], 
+        self, sessions: List[Path], indices: List[int],
         format: str = "markdown", detailed: bool = False
     ) -> Tuple[int, int]:
         """Extract multiple sessions by index.
-        
+
         Args:
             sessions: List of session paths
             indices: Indices to extract
@@ -683,9 +699,11 @@ class ClaudeConversationExtractor:
         for idx in indices:
             if 0 <= idx < len(sessions):
                 session_path = sessions[idx]
+                # Extract project name from session path
+                project_name = session_path.parent.name
                 conversation = self.extract_conversation(session_path, detailed=detailed)
                 if conversation:
-                    output_path = self.save_conversation(conversation, session_path.stem, format=format)
+                    output_path = self.save_conversation(conversation, session_path.stem, format=format, project_name=project_name)
                     success += 1
                     msg_count = len(conversation)
                     print(
@@ -888,12 +906,13 @@ Examples:
                             conversation = extractor.extract_conversation(selected_path, detailed=args.detailed)
                             if conversation:
                                 session_id = selected_path.stem
+                                project_name = selected_path.parent.name
                                 if args.format == "json":
-                                    output = extractor.save_as_json(conversation, session_id)
+                                    output = extractor.save_as_json(conversation, session_id, project_name)
                                 elif args.format == "html":
-                                    output = extractor.save_as_html(conversation, session_id)
+                                    output = extractor.save_as_html(conversation, session_id, project_name)
                                 else:
-                                    output = extractor.save_as_markdown(conversation, session_id)
+                                    output = extractor.save_as_markdown(conversation, session_id, project_name)
                                 print(f"✅ Saved: {output.name}")
             except (EOFError, KeyboardInterrupt):
                 print("\n👋 Cancelled")
@@ -1005,7 +1024,8 @@ def launch_interactive():
                     conversation = extractor.extract_conversation(selected_file)
                     if conversation:
                         session_id = selected_file.stem
-                        output = extractor.save_as_markdown(conversation, session_id)
+                        project_name = selected_file.parent.name
+                        output = extractor.save_as_markdown(conversation, session_id, project_name)
                         print(f"✅ Saved: {output.name}")
             except (EOFError, KeyboardInterrupt):
                 print("\n👋 Cancelled")

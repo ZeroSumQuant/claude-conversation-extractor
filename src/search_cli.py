@@ -103,7 +103,8 @@ def main():
                         if extract_choice == 'y':
                             conversation = extractor.extract_conversation(session_paths[0])
                             if conversation:
-                                output = extractor.save_as_markdown(conversation, sessions[0][1])
+                                project_name = session_paths[0].parent.name
+                                output = extractor.save_as_markdown(conversation, sessions[0][1], project_name)
                                 print(f"✅ Saved: {output.name}")
                     else:
                         # Multiple results, let user choose
@@ -121,7 +122,8 @@ def main():
                                 if extract_choice == 'y':
                                     conversation = extractor.extract_conversation(session_paths[view_num - 1])
                                     if conversation:
-                                        output = extractor.save_as_markdown(conversation, sessions[view_num - 1][1])
+                                        project_name = session_paths[view_num - 1].parent.name
+                                        output = extractor.save_as_markdown(conversation, sessions[view_num - 1][1], project_name)
                                         print(f"✅ Saved: {output.name}")
                         except (ValueError, IndexError):
                             print("❌ Invalid selection")
@@ -132,7 +134,8 @@ def main():
                         print(f"\n📤 Extracting session {i}...")
                         conversation = extractor.extract_conversation(session_path)
                         if conversation:
-                            output = extractor.save_as_markdown(conversation, sid)
+                            project_name = session_path.parent.name
+                            output = extractor.save_as_markdown(conversation, sid, project_name)
                             print(f"✅ Saved: {output.name}")
                 
                 elif choice == 'Q':
