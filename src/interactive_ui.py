@@ -21,6 +21,14 @@ except ImportError:
     from search_conversations import ConversationSearcher
 
 
+# Constants
+SESSION_DISPLAY_LIMIT = 20
+PROJECT_LENGTH = 30
+MAJOR_SEPARATOR_WIDTH = 60
+PROGRESS_BAR_WIDTH = 40
+RECENT_SESSIONS_LIMIT = 5
+
+
 class InteractiveUI:
     """Interactive terminal UI for easier conversation extraction"""
 
@@ -120,18 +128,18 @@ class InteractiveUI:
         print(f"\n✅ Found {len(self.sessions)} conversations!\n")
 
         # Display sessions
-        for i, session_path in enumerate(self.sessions[:20], 1):  # Show max 20
+        for i, session_path in enumerate(self.sessions[:SESSION_DISPLAY_LIMIT], 1):  # Show max SESSION_DISPLAY_LIMIT
             project = session_path.parent.name
             modified = datetime.fromtimestamp(session_path.stat().st_mtime)
             size_kb = session_path.stat().st_size / 1024
 
             date_str = modified.strftime("%Y-%m-%d %H:%M")
-            print(f"  {i:2d}. [{date_str}] {project[:30]:<30} ({size_kb:.1f} KB)")
+            print(f"  {i:2d}. [{date_str}] {project[:PROJECT_LENGTH]:<{PROJECT_LENGTH}} ({size_kb:.1f} KB)")
 
-        if len(self.sessions) > 20:
-            print(f"\n  ... and {len(self.sessions) - 20} more conversations")
+        if len(self.sessions) > SESSION_DISPLAY_LIMIT:
+            print(f"\n  ... and {len(self.sessions) - SESSION_DISPLAY_LIMIT} more conversations")
 
-        print("\n" + "=" * 60)
+        print("\n" + "=" * MAJOR_SEPARATOR_WIDTH)
         print("\nOptions:")
         print("  A. Extract ALL conversations")
         print("  R. Extract 5 most RECENT")
@@ -147,7 +155,7 @@ class InteractiveUI:
             elif choice == "A":
                 return list(range(len(self.sessions)))
             elif choice == "R":
-                return list(range(min(5, len(self.sessions))))
+                return list(range(min(RECENT_SESSIONS_LIMIT, len(self.sessions))))
             elif choice == "S":
                 selection = input("Enter conversation numbers (e.g., 1,3,5): ").strip()
                 try:
@@ -169,7 +177,7 @@ class InteractiveUI:
 
     def show_progress(self, current: int, total: int, message: str = ""):
         """Display a simple progress bar"""
-        bar_width = 40
+        bar_width = PROGRESS_BAR_WIDTH
         progress = current / total if total > 0 else 0
         filled = int(bar_width * progress)
         bar = "█" * filled + "░" * (bar_width - filled)

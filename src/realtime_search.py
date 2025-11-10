@@ -22,6 +22,21 @@ else:
     import tty
 
 
+# Constants
+TERMINAL_UPDATE_RATE = 0.1
+GET_KEY_SLEEP_TIME = 0.01
+MAX_PREVIEW_LENGTH = 60
+MAX_RESULTS_DISPLAYED = 10
+PROJECT_NAME_MAX_LENGTH = 20
+DEBOUNCE_DELAY_MS = 300
+DEFAULT_MAX_RESULTS = 20
+SEARCH_WORKER_POLL_INTERVAL = 0.05
+TIMEOUT_WORKER_THREAD = 0.5
+HEADER_LINES_COUNT = 4
+MAJOR_SEPARATOR_WIDTH = 60
+SEARCH_BOX_OFFSET = 3
+
+
 @dataclass
 class SearchState:
     """Maintains the current state of the search interface"""
@@ -58,7 +73,7 @@ class KeyboardHandler:
         if sys.platform != "win32" and self.old_settings:
             termios.tcsetattr(self.stdin_fd, termios.TCSADRAIN, self.old_settings)
 
-    def get_key(self, timeout: float = 0.1) -> Optional[str]:
+    def get_key(self, timeout: float = TERMINAL_UPDATE_RATE) -> Optional[str]:
         """Get a single keypress with timeout - FIXED version"""
         if sys.platform == "win32":
             # Windows implementation
@@ -88,7 +103,7 @@ class KeyboardHandler:
                             return key.decode("utf-8")
                         except UnicodeDecodeError:
                             return None
-                time.sleep(0.01)
+                time.sleep(GET_KEY_SLEEP_TIME)
             return None
         else:
             # Unix/Linux/macOS implementation - FIXED
@@ -145,7 +160,7 @@ class TerminalDisplay:
 
     def __init__(self):
         self.last_result_count = 0
-        self.header_lines = 4  # Lines used by header
+        self.header_lines = HEADER_LINES_COUNT  # Lines used by header
 
     def clear_screen(self):
         """Clear the terminal screen"""
@@ -174,9 +189,9 @@ class TerminalDisplay:
         """Draw the search interface header"""
         self.move_cursor(1, 1)
         print("🔍 REAL-TIME SEARCH")
-        print("=" * 60)
+        print("=" * MAJOR_SEPARATOR_WIDTH)
         print("Type to search • ↑↓ to select • Enter to open • ESC to exit")
-        print("─" * 60)
+        print("─" * MAJOR_SEPARATOR_WIDTH)
 
     def draw_results(self, results: List, selected_index: int, query: str):
         """Draw search results with highlighting"""
@@ -193,7 +208,7 @@ class TerminalDisplay:
                 print("Start typing to search...")
         else:
             # Display results
-            for i, result in enumerate(results[:10]):  # Show max 10 results
+            for i, result in enumerate(results[:MAX_RESULTS_DISPLAYED]):  # Show max MAX_RESULTS_DISPLAYED results
                 self.move_cursor(self.header_lines + i + 1, 1)
 
                 # Format result display
@@ -204,10 +219,10 @@ class TerminalDisplay:
 
                 # Show result info
                 date_str = result.timestamp.strftime("%Y-%m-%d")
-                project = Path(result.file_path).parent.name[:20]
+                project = Path(result.file_path).parent.name[:PROJECT_NAME_MAX_LENGTH]
 
                 # Highlight matching text
-                preview = result.context[:60].replace("\n", " ")
+                preview = result.context[:MAX_PREVIEW_LENGTH].replace("\n", " ")
                 if query.lower() in preview.lower():
                     # Simple highlighting - could be improved
                     idx = preview.lower().find(query.lower())
@@ -219,15 +234,15 @@ class TerminalDisplay:
 
                 print(f"📄 {date_str} | {project} | {preview}...")
 
-        self.last_result_count = len(results[:10])
+        self.last_result_count = len(results[:MAX_RESULTS_DISPLAYED])
 
     def draw_search_box(self, query: str, cursor_pos: int):
         """Draw the search input box"""
         # Position at bottom of results
-        row = self.header_lines + self.last_result_count + 3
+        row = self.header_lines + self.last_result_count + SEARCH_BOX_OFFSET
         self.move_cursor(row, 1)
         self.clear_line()
-        print("─" * 60)
+        print("─" * MAJOR_SEPARATOR_WIDTH)
 
         self.move_cursor(row + 1, 1)
         self.clear_line()
@@ -249,7 +264,7 @@ class RealTimeSearch:
         self.search_thread = None
         self.search_lock = threading.Lock()
         self.results_cache = {}
-        self.debounce_delay = 0.3  # 300ms debounce
+        self.debounce_delay = DEBOUNCE_DELAY_MS / 1000  # Convert to seconds
         self.stop_event = threading.Event()  # For clean thread shutdown
 
     def _process_search_request(self):
@@ -282,7 +297,7 @@ class RealTimeSearch:
             search_kwargs = {
                 "query": query,
                 "mode": "smart",
-                "max_results": 20,
+                "max_results": DEFAULT_MAX_RESULTS,
                 "case_sensitive": False,
             }
             if hasattr(self, "search_dir") and self.search_dir:
@@ -307,7 +322,7 @@ class RealTimeSearch:
         """Background thread for searching"""
         while not self.stop_event.is_set():
             # Wait for search request
-            time.sleep(0.05)
+            time.sleep(SEARCH_WORKER_POLL_INTERVAL)
             self._process_search_request()
 
         # Thread cleanup
@@ -335,7 +350,7 @@ class RealTimeSearch:
         elif key == "DOWN":
             if self.state.results:
                 self.state.selected_index = min(
-                    len(self.state.results[:10]) - 1, self.state.selected_index + 1
+                    len(self.state.results[:MAX_RESULTS_DISPLAYED]) - 1, self.state.selected_index + 1
                 )
                 return "redraw"  # Signal to redraw
 
@@ -389,7 +404,7 @@ class RealTimeSearch:
         """Stop the search worker thread cleanly"""
         if self.search_thread and self.search_thread.is_alive():
             self.stop_event.set()
-            self.search_thread.join(timeout=0.5)
+            self.search_thread.join(timeout=TIMEOUT_WORKER_THREAD)
 
     def run(self) -> Optional[Path]:
         """Run the real-time search interface"""
@@ -404,7 +419,7 @@ class RealTimeSearch:
             with KeyboardHandler() as keyboard:
                 # Initial draw
                 self.display.draw_results(
-                    self.state.results[:10],
+                    self.state.results[:MAX_RESULTS_DISPLAYED],
                     self.state.selected_index,
                     self.state.query,
                 )
@@ -414,7 +429,7 @@ class RealTimeSearch:
                 
                 while True:
                     # Get keyboard input
-                    key = keyboard.get_key(timeout=0.1)
+                    key = keyboard.get_key(timeout=TERMINAL_UPDATE_RATE)
                     
                     if key:
                         action = self.handle_input(key)
@@ -429,7 +444,7 @@ class RealTimeSearch:
                         elif action == "redraw" or action is None:
                             # Redraw the interface
                             self.display.draw_results(
-                                self.state.results[:10],
+                                self.state.results[:MAX_RESULTS_DISPLAYED],
                                 self.state.selected_index,
                                 self.state.query,
                             )
@@ -510,7 +525,7 @@ def create_smart_searcher(searcher):
                 pass  # Keep original order if sorting fails
 
         # Limit results
-        max_results = kwargs.get("max_results", 20)
+        max_results = kwargs.get("max_results", DEFAULT_MAX_RESULTS)
         return results[:max_results]
 
     # Replace the search method

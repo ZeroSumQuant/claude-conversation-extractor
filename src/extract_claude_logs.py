@@ -14,6 +14,22 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
+# Constants
+INDENT_NUMBER = 2
+MAJOR_SEPARATOR_WIDTH = 60
+MINOR_SEPARATOR_WIDTH = 40
+SESSION_ID_MAX_LENGTH = 8
+LINES_SHOWN_MESSAGE = 8
+LINES_PER_PAGE_MESSAGE = 30
+MAX_LINES_PER_MESSAGE_DISPLAY = 50
+MAX_LINE_LENGTH_DISPLAY = 100
+MIN_PREVIEW_TEXT_LENGTH = 3
+PREVIEW_TEXT_TRUNCATE_LENGTH = 100
+PREVIEW_ERROR_TRUNCATE_LENGTH = 30
+LIST_SEPARATOR_WIDTH = 80
+SEARCH_MAX_RESULTS_DEFAULT = 30
+
+
 class ClaudeConversationExtractor:
     """Extract and convert Claude Code conversations from JSONL to markdown."""
 
@@ -122,7 +138,7 @@ class ClaudeConversationExtractor:
                                 conversation.append(
                                     {
                                         "role": "tool_use",
-                                        "content": f"🔧 Tool: {tool_name}\nInput: {json.dumps(tool_input, indent=2)}",
+                                        "content": f"🔧 Tool: {tool_name}\nInput: {json.dumps(tool_input, indent=INDENT_NUMBER)}",
                                         "timestamp": entry.get("timestamp", ""),
                                     }
                                 )
@@ -183,7 +199,7 @@ class ClaudeConversationExtractor:
                         tool_name = item.get("name", "unknown")
                         tool_input = item.get("input", {})
                         text_parts.append(f"\n🔧 Using tool: {tool_name}")
-                        text_parts.append(f"Input: {json.dumps(tool_input, indent=2)}\n")
+                        text_parts.append(f"Input: {json.dumps(tool_input, indent=INDENT_NUMBER)}\n")
             return "\n".join(text_parts)
         else:
             return str(content)
@@ -208,9 +224,9 @@ class ClaudeConversationExtractor:
             
             # Clear screen and show header
             print("\033[2J\033[H", end="")  # Clear screen
-            print("=" * 60)
+            print("=" * MAJOR_SEPARATOR_WIDTH)
             print(f"📄 Viewing: {jsonl_path.parent.name}")
-            print(f"Session: {session_id[:8]}...")
+            print(f"Session: {session_id[:SESSION_ID_MAX_LENGTH]}...")
             
             # Get timestamp from first message
             first_timestamp = messages[0].get("timestamp", "")
@@ -221,12 +237,12 @@ class ClaudeConversationExtractor:
                 except Exception:
                     pass
             
-            print("=" * 60)
+            print("=" * MAJOR_SEPARATOR_WIDTH)
             print("↑↓ to scroll • Q to quit • Enter to continue\n")
             
             # Display messages with pagination
-            lines_shown = 8  # Header lines
-            lines_per_page = 30
+            lines_shown = LINES_SHOWN_MESSAGE  # Header lines
+            lines_per_page = LINES_PER_PAGE_MESSAGE
             
             for i, msg in enumerate(messages):
                 role = msg["role"]
@@ -234,13 +250,13 @@ class ClaudeConversationExtractor:
                 
                 # Format role display
                 if role == "user" or role == "human":
-                    print(f"\n{'─' * 40}")
+                    print(f"\n{'─' * MINOR_SEPARATOR_WIDTH}")
                     print(f"👤 HUMAN:")
-                    print(f"{'─' * 40}")
+                    print(f"{'─' * MINOR_SEPARATOR_WIDTH}")
                 elif role == "assistant":
-                    print(f"\n{'─' * 40}")
+                    print(f"\n{'─' * MINOR_SEPARATOR_WIDTH}")
                     print(f"🤖 CLAUDE:")
-                    print(f"{'─' * 40}")
+                    print(f"{'─' * MINOR_SEPARATOR_WIDTH}")
                 elif role == "tool_use":
                     print(f"\n🔧 TOOL USE:")
                 elif role == "tool_result":
@@ -252,12 +268,12 @@ class ClaudeConversationExtractor:
                 
                 # Display content (limit very long messages)
                 lines = content.split('\n')
-                max_lines_per_msg = 50
+                max_lines_per_msg = MAX_LINES_PER_MESSAGE_DISPLAY
                 
                 for line_idx, line in enumerate(lines[:max_lines_per_msg]):
                     # Wrap very long lines
-                    if len(line) > 100:
-                        line = line[:97] + "..."
+                    if len(line) > MAX_LINE_LENGTH_DISPLAY:
+                        line = line[:(MAX_LINE_LENGTH_DISPLAY - 3)] + "..."
                     print(line)
                     lines_shown += 1
                     
@@ -275,9 +291,9 @@ class ClaudeConversationExtractor:
                     print(f"... [{len(lines) - max_lines_per_msg} more lines truncated]")
                     lines_shown += 1
             
-            print("\n" + "=" * 60)
+            print("\n" + "=" * MAJOR_SEPARATOR_WIDTH)
             print("📄 End of conversation")
-            print("=" * 60)
+            print("=" * MAJOR_SEPARATOR_WIDTH)
             input("\nPress Enter to continue...")
             
         except Exception as e:
@@ -306,7 +322,7 @@ class ClaudeConversationExtractor:
             date_str = datetime.now().strftime("%Y-%m-%d")
             time_str = ""
 
-        filename = f"claude-conversation-{date_str}-{session_id[:8]}.md"
+        filename = f"claude-conversation-{date_str}-{session_id[:SESSION_ID_MAX_LENGTH]}.md"
         output_path = self.output_dir / filename
 
         with open(output_path, "w", encoding="utf-8") as f:
@@ -361,7 +377,7 @@ class ClaudeConversationExtractor:
         else:
             date_str = datetime.now().strftime("%Y-%m-%d")
 
-        filename = f"claude-conversation-{date_str}-{session_id[:8]}.json"
+        filename = f"claude-conversation-{date_str}-{session_id[:SESSION_ID_MAX_LENGTH]}.json"
         output_path = self.output_dir / filename
 
         # Create JSON structure
@@ -373,7 +389,7 @@ class ClaudeConversationExtractor:
         }
 
         with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(output, f, indent=2, ensure_ascii=False)
+            json.dump(output, f, indent=INDENT_NUMBER, ensure_ascii=False)
 
         return output_path
     
@@ -398,7 +414,7 @@ class ClaudeConversationExtractor:
             date_str = datetime.now().strftime("%Y-%m-%d")
             time_str = ""
 
-        filename = f"claude-conversation-{date_str}-{session_id[:8]}.html"
+        filename = f"claude-conversation-{date_str}-{session_id[:SESSION_ID_MAX_LENGTH]}.html"
         output_path = self.output_dir / filename
 
         # HTML template with modern styling
@@ -407,7 +423,7 @@ class ClaudeConversationExtractor:
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Claude Conversation - {session_id[:8]}</title>
+    <title>Claude Conversation - {session_id[:SESSION_ID_MAX_LENGTH]}</title>
     <style>
         body {{
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -593,8 +609,8 @@ class ClaudeConversationExtractor:
                                                         text = parts[1].strip()
                                                 
                                                 # If we have real user text, use it
-                                                if text and len(text) > 3:  # Lower threshold to catch "hello"
-                                                    first_user_msg = text[:100].replace('\n', ' ')
+                                                if text and len(text) > MIN_PREVIEW_TEXT_LENGTH:  # Lower threshold to catch "hello"
+                                                    first_user_msg = text[:PREVIEW_TEXT_TRUNCATE_LENGTH].replace('\n', ' ')
                                                     break
                                     
                                     # Handle string content (less common but possible)
@@ -615,14 +631,14 @@ class ClaudeConversationExtractor:
                                         
                                         # Skip tool results and interruptions
                                         if not content.startswith("tool_use_id") and "[Request interrupted" not in content:
-                                            if content and len(content) > 3:  # Lower threshold to catch short messages
-                                                first_user_msg = content[:100].replace('\n', ' ')
+                                            if content and len(content) > MIN_PREVIEW_TEXT_LENGTH:  # Lower threshold to catch short messages
+                                                first_user_msg = content[:PREVIEW_TEXT_TRUNCATE_LENGTH].replace('\n', ' ')
                         except json.JSONDecodeError:
                             continue
                             
             return first_user_msg or "No preview available", msg_count
         except Exception as e:
-            return f"Error: {str(e)[:30]}", 0
+            return f"Error: {str(e)[:PREVIEW_ERROR_TRUNCATE_LENGTH]}", 0
 
     def list_recent_sessions(self, limit: int = None) -> List[Path]:
         """List recent sessions with details."""
@@ -634,7 +650,7 @@ class ClaudeConversationExtractor:
             return []
 
         print(f"\n📚 Found {len(sessions)} Claude sessions:\n")
-        print("=" * 80)
+        print("=" * LIST_SEPARATOR_WIDTH)
 
         # Show all sessions if no limit specified
         sessions_to_show = sessions[:limit] if limit else sessions
@@ -656,13 +672,13 @@ class ClaudeConversationExtractor:
 
             # Print formatted info
             print(f"\n{i}. 📁 {project}")
-            print(f"   📄 Session: {session_id[:8]}...")
+            print(f"   📄 Session: {session_id[:SESSION_ID_MAX_LENGTH]}...")
             print(f"   📅 Modified: {modified.strftime('%Y-%m-%d %H:%M')}")
             print(f"   💬 Messages: {msg_count}")
             print(f"   💾 Size: {size_kb:.1f} KB")
             print(f"   📝 Preview: \"{preview}...\"")
 
-        print("\n" + "=" * 80)
+        print("\n" + "=" * LIST_SEPARATOR_WIDTH)
         return sessions[:limit]
 
     def extract_multiple(
@@ -844,7 +860,7 @@ Examples:
             date_to=date_to,
             speaker_filter=speaker_filter,
             case_sensitive=args.case_sensitive,
-            max_results=30,
+            max_results=SEARCH_MAX_RESULTS_DEFAULT,
         )
 
         if not results:
@@ -867,11 +883,11 @@ Examples:
             print(f"\n{len(file_paths_list)}. 📄 {file_path.parent.name} ({len(file_results)} matches)")
             # Show first match preview
             first = file_results[0]
-            print(f"   {first.speaker}: {first.matched_content[:100]}...")
+            print(f"   {first.speaker}: {first.matched_content[:PREVIEW_TEXT_TRUNCATE_LENGTH]}...")
 
         # Offer to view conversations
         if file_paths_list:
-            print("\n" + "=" * 60)
+            print("\n" + "=" * MAJOR_SEPARATOR_WIDTH)
             try:
                 view_choice = input("\nView a conversation? Enter number (1-{}) or press Enter to skip: ".format(
                     len(file_paths_list))).strip()
