@@ -7,18 +7,28 @@ import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 # Handle both package and direct execution imports
 try:
     from .extract_claude_logs import ClaudeConversationExtractor
-    from .realtime_search import RealTimeSearch, create_smart_searcher
-    from .search_conversations import ConversationSearcher
+    from .constants import (
+        SESSION_DISPLAY_LIMIT,
+        PROJECT_LENGTH,
+        MAJOR_SEPARATOR_WIDTH,
+        PROGRESS_BAR_WIDTH,
+        RECENT_SESSIONS_LIMIT,
+    )
 except ImportError:
     # Fallback for direct execution or when not installed as package
     from extract_claude_logs import ClaudeConversationExtractor
-    from realtime_search import RealTimeSearch, create_smart_searcher
-    from search_conversations import ConversationSearcher
+    from constants import (
+        SESSION_DISPLAY_LIMIT,
+        PROJECT_LENGTH,
+        MAJOR_SEPARATOR_WIDTH,
+        PROGRESS_BAR_WIDTH,
+        RECENT_SESSIONS_LIMIT,
+    )
 
 
 class InteractiveUI:
@@ -27,7 +37,6 @@ class InteractiveUI:
     def __init__(self, output_dir: Optional[str] = None):
         self.output_dir = output_dir
         self.extractor = ClaudeConversationExtractor(output_dir)
-        self.searcher = ConversationSearcher()
         self.sessions: List[Path] = []
         self.terminal_width = shutil.get_terminal_size().columns
 
@@ -120,23 +129,26 @@ class InteractiveUI:
         print(f"\n✅ Found {len(self.sessions)} conversations!\n")
 
         # Display sessions
-        for i, session_path in enumerate(self.sessions[:20], 1):  # Show max 20
+        for i, session_path in enumerate(
+            self.sessions[:SESSION_DISPLAY_LIMIT], 1
+        ):  # Show max SESSION_DISPLAY_LIMIT
             project = session_path.parent.name
             modified = datetime.fromtimestamp(session_path.stat().st_mtime)
             size_kb = session_path.stat().st_size / 1024
 
             date_str = modified.strftime("%Y-%m-%d %H:%M")
-            print(f"  {i:2d}. [{date_str}] {project[:30]:<30} ({size_kb:.1f} KB)")
+            print(
+                f"  {i:2d}. [{date_str}] {project[:PROJECT_LENGTH]:<{PROJECT_LENGTH}} ({size_kb:.1f} KB)"
+            )
 
-        if len(self.sessions) > 20:
-            print(f"\n  ... and {len(self.sessions) - 20} more conversations")
+        if len(self.sessions) > SESSION_DISPLAY_LIMIT:
+            print(f"\n  ... and {len(self.sessions) - SESSION_DISPLAY_LIMIT} more conversations")
 
-        print("\n" + "=" * 60)
+        print("\n" + "=" * MAJOR_SEPARATOR_WIDTH)
         print("\nOptions:")
         print("  A. Extract ALL conversations")
         print("  R. Extract 5 most RECENT")
         print("  S. SELECT specific conversations (e.g., 1,3,5)")
-        print("  F. SEARCH conversations (real-time search)")
         print("  Q. QUIT")
 
         while True:
@@ -147,7 +159,7 @@ class InteractiveUI:
             elif choice == "A":
                 return list(range(len(self.sessions)))
             elif choice == "R":
-                return list(range(min(5, len(self.sessions))))
+                return list(range(min(RECENT_SESSIONS_LIMIT, len(self.sessions))))
             elif choice == "S":
                 selection = input("Enter conversation numbers (e.g., 1,3,5): ").strip()
                 try:
@@ -159,66 +171,57 @@ class InteractiveUI:
                         print("❌ Invalid selection. Please use valid numbers.")
                 except ValueError:
                     print("❌ Invalid format. Use comma-separated numbers.")
-            elif choice == "F":
-                # Search functionality
-                search_results = self.search_conversations()
-                if search_results:
-                    return search_results
             else:
                 print("❌ Invalid choice. Please try again.")
 
     def show_progress(self, current: int, total: int, message: str = ""):
         """Display a simple progress bar"""
-        bar_width = 40
+        bar_width = PROGRESS_BAR_WIDTH
         progress = current / total if total > 0 else 0
         filled = int(bar_width * progress)
         bar = "█" * filled + "░" * (bar_width - filled)
 
         print(f"\r[{bar}] {current}/{total} {message}", end="", flush=True)
 
-    def search_conversations(self) -> List[int]:
-        """Launch real-time search interface"""
-        # Enhance searcher with smart search
-        smart_searcher = create_smart_searcher(self.searcher)
+    def get_metadata_input(self) -> Tuple[str, str, Optional[List[str]]]:
+        """Prompt user for optional metadata (title, description, tags)"""
+        print("\n" + "=" * 50)
+        print("📝 Add metadata to your export (optional)")
+        print("=" * 50)
+        print("Press Enter to skip any field.\n")
 
-        # Create and run real-time search
-        rts = RealTimeSearch(smart_searcher, self.extractor)
-        selected_file = rts.run()
+        title = input("Title (e.g., 'Debugging Redis Connection'): ").strip()
+        description = input("Description (e.g., 'Fixed timeout issues'): ").strip()
+        tags_input = input("Tags (comma-separated, e.g., 'bugfix,redis'): ").strip()
 
-        if selected_file:
-            # View the selected conversation
-            self.extractor.display_conversation(Path(selected_file))
-            
-            # Ask if user wants to extract it
-            extract_choice = input("\n📤 Extract this conversation? (y/N): ").strip().lower()
-            if extract_choice == 'y':
-                try:
-                    index = self.sessions.index(Path(selected_file))
-                    return [index]
-                except ValueError:
-                    print("\n❌ Error: Selected file not found in sessions list")
-                    input("\nPress Enter to continue...")
-            
-            # Return empty to go back to menu
-            return []
+        tags = [t.strip() for t in tags_input.split(",") if t.strip()] if tags_input else None
 
-        return []
+        return title, description, tags
 
-    def extract_conversations(self, indices: List[int], output_dir: Path) -> int:
+    def extract_conversations(
+        self,
+        indices: List[int],
+        output_dir: Path,
+        title: str = "",
+        description: str = "",
+        tags: List[str] = None,
+    ) -> int:
         """Extract selected conversations with progress display"""
         print(f"\n📤 Extracting {len(indices)} conversations...\n")
 
         # Update the extractor's output directory
         self.extractor.output_dir = output_dir
 
-        # Use the extractor's method
+        # Use the extractor's method with metadata
         success_count, total_count = self.extractor.extract_multiple(
-            self.sessions, indices
+            self.sessions,
+            indices,
+            title=title,
+            description=description,
+            tags=tags,
         )
 
-        print(
-            f"\n\n✅ Successfully extracted {success_count}/{total_count} conversations!"
-        )
+        print(f"\n\n✅ Successfully extracted {success_count}/{total_count} conversations!")
         return success_count
 
     def open_folder(self, path: Path):
@@ -251,8 +254,13 @@ class InteractiveUI:
             # Create output directory if needed
             output_dir.mkdir(parents=True, exist_ok=True)
 
+            # Get optional metadata
+            title, description, tags = self.get_metadata_input()
+
             # Extract conversations
-            success_count = self.extract_conversations(selected_indices, output_dir)
+            success_count = self.extract_conversations(
+                selected_indices, output_dir, title=title, description=description, tags=tags
+            )
 
             if success_count > 0:
                 print(f"\n📁 Files saved to: {output_dir}")

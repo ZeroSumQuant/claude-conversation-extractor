@@ -1,0 +1,37 @@
+{
+  "name": "claude-conversation-extractor-vscode",
+  "displayName": "Claude Conversation Extractor",
+  "description": "Extract Claude Code conversations directly from VS Code",
+  "version": "0.0.1",
+  "publisher": "ZeroSumQuant",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "claude-extractor.start",
+        "title": "Claude: Start Interactive Extractor"
+      },
+      {
+        "command": "claude-extractor.extractRecent",
+        "title": "Claude: Extract Recent Conversations"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "^16.11.7",
+    "typescript": "^5.1.3"
+  }
+}
