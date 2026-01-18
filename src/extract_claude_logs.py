@@ -9,6 +9,7 @@ readable markdown files.
 
 import argparse
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -67,7 +68,7 @@ class ClaudeConversationExtractor:
 
     def extract_conversation(self, jsonl_path: Path, detailed: bool = False) -> List[Dict[str, str]]:
         """Extract conversation messages from a JSONL file.
-        
+
         Args:
             jsonl_path: Path to the JSONL file
             detailed: If True, include tool use, MCP responses, and system messages
@@ -111,7 +112,7 @@ class ClaudeConversationExtractor:
                                             "timestamp": entry.get("timestamp", ""),
                                         }
                                     )
-                        
+
                         # Include tool use and system messages if detailed mode
                         elif detailed:
                             # Extract tool use events
@@ -126,7 +127,7 @@ class ClaudeConversationExtractor:
                                         "timestamp": entry.get("timestamp", ""),
                                     }
                                 )
-                            
+
                             # Extract tool results
                             elif entry.get("type") == "tool_result":
                                 result = entry.get("result", {})
@@ -138,7 +139,7 @@ class ClaudeConversationExtractor:
                                         "timestamp": entry.get("timestamp", ""),
                                     }
                                 )
-                            
+
                             # Extract system messages
                             elif entry.get("type") == "system" and "message" in entry:
                                 msg = entry.get("message", "")
@@ -164,7 +165,7 @@ class ClaudeConversationExtractor:
 
     def _extract_text_content(self, content, detailed: bool = False) -> str:
         """Extract text from various content formats Claude uses.
-        
+
         Args:
             content: The content to extract from
             detailed: If True, include tool use blocks and other metadata
@@ -190,7 +191,7 @@ class ClaudeConversationExtractor:
 
     def display_conversation(self, jsonl_path: Path, detailed: bool = False) -> None:
         """Display a conversation in the terminal with pagination.
-        
+
         Args:
             jsonl_path: Path to the JSONL file
             detailed: If True, include tool use and system messages
@@ -198,20 +199,20 @@ class ClaudeConversationExtractor:
         try:
             # Extract conversation
             messages = self.extract_conversation(jsonl_path, detailed=detailed)
-            
+
             if not messages:
                 print("❌ No messages found in conversation")
                 return
-            
+
             # Get session info
             session_id = jsonl_path.stem
-            
+
             # Clear screen and show header
             print("\033[2J\033[H", end="")  # Clear screen
             print("=" * 60)
             print(f"📄 Viewing: {jsonl_path.parent.name}")
             print(f"Session: {session_id[:8]}...")
-            
+
             # Get timestamp from first message
             first_timestamp = messages[0].get("timestamp", "")
             if first_timestamp:
@@ -220,18 +221,18 @@ class ClaudeConversationExtractor:
                     print(f"Date: {dt.strftime('%Y-%m-%d %H:%M:%S')}")
                 except Exception:
                     pass
-            
+
             print("=" * 60)
             print("↑↓ to scroll • Q to quit • Enter to continue\n")
-            
+
             # Display messages with pagination
             lines_shown = 8  # Header lines
             lines_per_page = 30
-            
+
             for i, msg in enumerate(messages):
                 role = msg["role"]
                 content = msg["content"]
-                
+
                 # Format role display
                 if role == "user" or role == "human":
                     print(f"\n{'─' * 40}")
@@ -249,18 +250,18 @@ class ClaudeConversationExtractor:
                     print(f"\nℹ️ SYSTEM:")
                 else:
                     print(f"\n{role.upper()}:")
-                
+
                 # Display content (limit very long messages)
                 lines = content.split('\n')
                 max_lines_per_msg = 50
-                
+
                 for line_idx, line in enumerate(lines[:max_lines_per_msg]):
                     # Wrap very long lines
                     if len(line) > 100:
                         line = line[:97] + "..."
                     print(line)
                     lines_shown += 1
-                    
+
                     # Check if we need to paginate
                     if lines_shown >= lines_per_page:
                         response = input("\n[Enter] Continue • [Q] Quit: ").strip().upper()
@@ -270,16 +271,16 @@ class ClaudeConversationExtractor:
                         # Clear screen for next page
                         print("\033[2J\033[H", end="")
                         lines_shown = 0
-                
+
                 if len(lines) > max_lines_per_msg:
                     print(f"... [{len(lines) - max_lines_per_msg} more lines truncated]")
                     lines_shown += 1
-            
+
             print("\n" + "=" * 60)
             print("📄 End of conversation")
             print("=" * 60)
             input("\nPress Enter to continue...")
-            
+
         except Exception as e:
             print(f"❌ Error displaying conversation: {e}")
             input("\nPress Enter to continue...")
@@ -297,8 +298,11 @@ class ClaudeConversationExtractor:
             try:
                 # Parse ISO timestamp
                 dt = datetime.fromisoformat(first_timestamp.replace("Z", "+00:00"))
-                date_str = dt.strftime("%Y-%m-%d")
-                time_str = dt.strftime("%H:%M:%S")
+
+                local_time_struct = time.localtime(dt.timestamp())
+
+                date_str = time.strftime("%Y-%m-%d", local_time_struct)
+                time_str = time.strftime("%H:%M:%S", local_time_struct)
             except Exception:
                 date_str = datetime.now().strftime("%Y-%m-%d")
                 time_str = ""
@@ -306,7 +310,7 @@ class ClaudeConversationExtractor:
             date_str = datetime.now().strftime("%Y-%m-%d")
             time_str = ""
 
-        filename = f"claude-conversation-{date_str}-{session_id[:8]}.md"
+        filename = f"claude-conversation-{date_str}-{time_str}-{session_id[:8]}.md"
         output_path = self.output_dir / filename
 
         with open(output_path, "w", encoding="utf-8") as f:
@@ -320,7 +324,7 @@ class ClaudeConversationExtractor:
             for msg in conversation:
                 role = msg["role"]
                 content = msg["content"]
-                
+
                 if role == "user":
                     f.write("## 👤 User\n\n")
                     f.write(f"{content}\n\n")
@@ -342,7 +346,7 @@ class ClaudeConversationExtractor:
                 f.write("---\n\n")
 
         return output_path
-    
+
     def save_as_json(
         self, conversation: List[Dict[str, str]], session_id: str
     ) -> Optional[Path]:
@@ -355,19 +359,25 @@ class ClaudeConversationExtractor:
         if first_timestamp:
             try:
                 dt = datetime.fromisoformat(first_timestamp.replace("Z", "+00:00"))
-                date_str = dt.strftime("%Y-%m-%d")
+
+                local_time_struct = time.localtime(dt.timestamp())
+
+                date_str = time.strftime("%Y-%m-%d", local_time_struct)
+                time_str = time.strftime("%H:%M:%S", local_time_struct)
             except Exception:
                 date_str = datetime.now().strftime("%Y-%m-%d")
+                time_str = ""
         else:
             date_str = datetime.now().strftime("%Y-%m-%d")
+            time_str = ""
 
-        filename = f"claude-conversation-{date_str}-{session_id[:8]}.json"
+        filename = f"claude-conversation-{date_str}-{time_str}-{session_id[:8]}.json"
         output_path = self.output_dir / filename
 
         # Create JSON structure
         output = {
             "session_id": session_id,
-            "date": date_str,
+            "date": date_str + " " + time_str,
             "message_count": len(conversation),
             "messages": conversation
         }
@@ -376,7 +386,7 @@ class ClaudeConversationExtractor:
             json.dump(output, f, indent=2, ensure_ascii=False)
 
         return output_path
-    
+
     def save_as_html(
         self, conversation: List[Dict[str, str]], session_id: str
     ) -> Optional[Path]:
@@ -389,8 +399,11 @@ class ClaudeConversationExtractor:
         if first_timestamp:
             try:
                 dt = datetime.fromisoformat(first_timestamp.replace("Z", "+00:00"))
-                date_str = dt.strftime("%Y-%m-%d")
-                time_str = dt.strftime("%H:%M:%S")
+
+                local_time_struct = time.localtime(dt.timestamp())
+
+                date_str = time.strftime("%Y-%m-%d", local_time_struct)
+                time_str = time.strftime("%H:%M:%S", local_time_struct)
             except Exception:
                 date_str = datetime.now().strftime("%Y-%m-%d")
                 time_str = ""
@@ -398,7 +411,7 @@ class ClaudeConversationExtractor:
             date_str = datetime.now().strftime("%Y-%m-%d")
             time_str = ""
 
-        filename = f"claude-conversation-{date_str}-{session_id[:8]}.html"
+        filename = f"claude-conversation-{date_str}-{time_str}-{session_id[:8]}.html"
         output_path = self.output_dir / filename
 
         # HTML template with modern styling
@@ -495,16 +508,16 @@ class ClaudeConversationExtractor:
 
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(html_content)
-            
+
             for msg in conversation:
                 role = msg["role"]
                 content = msg["content"]
-                
+
                 # Escape HTML
                 content = content.replace("&", "&amp;")
                 content = content.replace("<", "&lt;")
                 content = content.replace(">", "&gt;")
-                
+
                 role_display = {
                     "user": "👤 User",
                     "assistant": "🤖 Claude",
@@ -512,12 +525,12 @@ class ClaudeConversationExtractor:
                     "tool_result": "📤 Tool Result",
                     "system": "ℹ️ System"
                 }.get(role, role)
-                
+
                 f.write(f'    <div class="message {role}">\n')
                 f.write(f'        <div class="role">{role_display}</div>\n')
                 f.write(f'        <div class="content">{content}</div>\n')
                 f.write(f'    </div>\n')
-            
+
             f.write("\n</body>\n</html>")
 
         return output_path
@@ -526,7 +539,7 @@ class ClaudeConversationExtractor:
         self, conversation: List[Dict[str, str]], session_id: str, format: str = "markdown"
     ) -> Optional[Path]:
         """Save conversation in the specified format.
-        
+
         Args:
             conversation: The conversation data
             session_id: Session identifier
@@ -547,7 +560,7 @@ class ClaudeConversationExtractor:
         try:
             first_user_msg = ""
             msg_count = 0
-            
+
             with open(session_path, 'r', encoding='utf-8') as f:
                 for line in f:
                     msg_count += 1
@@ -559,67 +572,67 @@ class ClaudeConversationExtractor:
                                 msg = data["message"]
                                 if msg.get("role") == "user":
                                     content = msg.get("content", "")
-                                    
+
                                     # Handle list content (common format in Claude JSONL)
                                     if isinstance(content, list):
                                         for item in content:
                                             if isinstance(item, dict) and item.get("type") == "text":
                                                 text = item.get("text", "").strip()
-                                                
+
                                                 # Skip tool results
                                                 if text.startswith("tool_use_id"):
                                                     continue
-                                                
+
                                                 # Skip interruption messages
                                                 if "[Request interrupted" in text:
                                                     continue
-                                                
+
                                                 # Skip Claude's session continuation messages
                                                 if "session is being continued" in text.lower():
                                                     continue
-                                                
+
                                                 # Remove XML-like tags (command messages, etc)
                                                 import re
                                                 text = re.sub(r'<[^>]+>', '', text).strip()
-                                                
-                                                # Skip command outputs  
+
+                                                # Skip command outputs
                                                 if "is running" in text and "…" in text:
                                                     continue
-                                                
+
                                                 # Handle image references - extract text after them
                                                 if text.startswith("[Image #"):
                                                     parts = text.split("]", 1)
                                                     if len(parts) > 1:
                                                         text = parts[1].strip()
-                                                
+
                                                 # If we have real user text, use it
                                                 if text and len(text) > 3:  # Lower threshold to catch "hello"
                                                     first_user_msg = text[:100].replace('\n', ' ')
                                                     break
-                                    
+
                                     # Handle string content (less common but possible)
                                     elif isinstance(content, str):
                                         import re
                                         content = content.strip()
-                                        
+
                                         # Remove XML-like tags
                                         content = re.sub(r'<[^>]+>', '', content).strip()
-                                        
+
                                         # Skip command outputs
                                         if "is running" in content and "…" in content:
                                             continue
-                                        
+
                                         # Skip Claude's session continuation messages
                                         if "session is being continued" in content.lower():
                                             continue
-                                        
+
                                         # Skip tool results and interruptions
                                         if not content.startswith("tool_use_id") and "[Request interrupted" not in content:
                                             if content and len(content) > 3:  # Lower threshold to catch short messages
                                                 first_user_msg = content[:100].replace('\n', ' ')
                         except json.JSONDecodeError:
                             continue
-                            
+
             return first_user_msg or "No preview available", msg_count
         except Exception as e:
             return f"Error: {str(e)[:30]}", 0
@@ -643,14 +656,14 @@ class ClaudeConversationExtractor:
             project = session.parent.name.replace('-', ' ').strip()
             if project.startswith("Users"):
                 project = "~/" + "/".join(project.split()[2:]) if len(project.split()) > 2 else "Home"
-            
+
             session_id = session.stem
             modified = datetime.fromtimestamp(session.stat().st_mtime)
 
             # Get file size
             size = session.stat().st_size
             size_kb = size / 1024
-            
+
             # Get preview and message count
             preview, msg_count = self.get_conversation_preview(session)
 
@@ -666,11 +679,11 @@ class ClaudeConversationExtractor:
         return sessions[:limit]
 
     def extract_multiple(
-        self, sessions: List[Path], indices: List[int], 
+        self, sessions: List[Path], indices: List[int],
         format: str = "markdown", detailed: bool = False
     ) -> Tuple[int, int]:
         """Extract multiple sessions by index.
-        
+
         Args:
             sessions: List of session paths
             indices: Indices to extract
@@ -773,7 +786,7 @@ Examples:
     parser.add_argument(
         "--case-sensitive", action="store_true", help="Make search case-sensitive"
     )
-    
+
     # Export format arguments
     parser.add_argument(
         "--format",
@@ -875,13 +888,13 @@ Examples:
             try:
                 view_choice = input("\nView a conversation? Enter number (1-{}) or press Enter to skip: ".format(
                     len(file_paths_list))).strip()
-                
+
                 if view_choice.isdigit():
                     view_num = int(view_choice)
                     if 1 <= view_num <= len(file_paths_list):
                         selected_path = file_paths_list[view_num - 1]
                         extractor.display_conversation(selected_path, detailed=args.detailed)
-                        
+
                         # Offer to extract after viewing
                         extract_choice = input("\n📤 Extract this conversation? (y/N): ").strip().lower()
                         if extract_choice == 'y':
@@ -897,7 +910,7 @@ Examples:
                                 print(f"✅ Saved: {output.name}")
             except (EOFError, KeyboardInterrupt):
                 print("\n👋 Cancelled")
-        
+
         return
 
     # Default action is to list sessions
@@ -967,7 +980,7 @@ Examples:
 def launch_interactive():
     """Launch the interactive UI directly, or handle search if specified."""
     import sys
-    
+
     # If no arguments provided, launch interactive UI
     if len(sys.argv) == 1:
         try:
@@ -984,20 +997,20 @@ def launch_interactive():
         except ImportError:
             from realtime_search import RealTimeSearch, create_smart_searcher
             from search_conversations import ConversationSearcher
-        
+
         # Initialize components
         extractor = ClaudeConversationExtractor()
         searcher = ConversationSearcher()
         smart_searcher = create_smart_searcher(searcher)
-        
+
         # Run search
         rts = RealTimeSearch(smart_searcher, extractor)
         selected_file = rts.run()
-        
+
         if selected_file:
             # View the selected conversation
             extractor.display_conversation(selected_file)
-            
+
             # Offer to extract
             try:
                 extract_choice = input("\n📤 Extract this conversation? (y/N): ").strip().lower()
