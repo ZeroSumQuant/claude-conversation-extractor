@@ -101,55 +101,72 @@ class ClaudeConversationExtractor:
                             msg = entry["message"]
                             if isinstance(msg, dict) and msg.get("role") == "assistant":
                                 content = msg.get("content", [])
-                                text = self._extract_text_content(content, detailed=detailed)
+                                timestamp = entry.get("timestamp", "")
 
-                                if text and text.strip():
-                                    conversation.append(
-                                        {
+                                if detailed and isinstance(content, list):
+                                    # Split assistant content into text + tool_use entries
+                                    text_parts = []
+                                    for item in content:
+                                        if isinstance(item, dict):
+                                            if item.get("type") == "text":
+                                                text_parts.append(item.get("text", ""))
+                                            elif item.get("type") == "tool_use":
+                                                # Flush accumulated text first
+                                                if text_parts:
+                                                    joined = "\n".join(text_parts).strip()
+                                                    if joined:
+                                                        conversation.append({
+                                                            "role": "assistant",
+                                                            "content": joined,
+                                                            "timestamp": timestamp,
+                                                        })
+                                                    text_parts = []
+                                                # Add tool_use as separate entry with structured data
+                                                tool_name = item.get("name", "unknown")
+                                                tool_input = item.get("input", {})
+                                                conversation.append({
+                                                    "role": "tool_use",
+                                                    "tool_name": tool_name,
+                                                    "tool_input": tool_input,
+                                                    "content": f"🔧 Tool: {tool_name}\nInput: {json.dumps(tool_input, indent=2, ensure_ascii=False)}",
+                                                    "timestamp": timestamp,
+                                                })
+                                    # Flush remaining text
+                                    if text_parts:
+                                        joined = "\n".join(text_parts).strip()
+                                        if joined:
+                                            conversation.append({
+                                                "role": "assistant",
+                                                "content": joined,
+                                                "timestamp": timestamp,
+                                            })
+                                else:
+                                    text = self._extract_text_content(content, detailed=detailed)
+                                    if text and text.strip():
+                                        conversation.append({
                                             "role": "assistant",
                                             "content": text,
-                                            "timestamp": entry.get("timestamp", ""),
-                                        }
-                                    )
-                        
-                        # Include tool use and system messages if detailed mode
-                        elif detailed:
-                            # Extract tool use events
-                            if entry.get("type") == "tool_use":
-                                tool_data = entry.get("tool", {})
-                                tool_name = tool_data.get("name", "unknown")
-                                tool_input = tool_data.get("input", {})
-                                conversation.append(
-                                    {
-                                        "role": "tool_use",
-                                        "content": f"🔧 Tool: {tool_name}\nInput: {json.dumps(tool_input, indent=2)}",
-                                        "timestamp": entry.get("timestamp", ""),
-                                    }
-                                )
-                            
-                            # Extract tool results
-                            elif entry.get("type") == "tool_result":
-                                result = entry.get("result", {})
-                                output = result.get("output", "") or result.get("error", "")
-                                conversation.append(
-                                    {
-                                        "role": "tool_result",
-                                        "content": f"📤 Result:\n{output}",
-                                        "timestamp": entry.get("timestamp", ""),
-                                    }
-                                )
-                            
-                            # Extract system messages
-                            elif entry.get("type") == "system" and "message" in entry:
-                                msg = entry.get("message", "")
-                                if msg:
-                                    conversation.append(
-                                        {
-                                            "role": "system",
-                                            "content": f"ℹ️ System: {msg}",
-                                            "timestamp": entry.get("timestamp", ""),
-                                        }
-                                    )
+                                            "timestamp": timestamp,
+                                        })
+
+                        # Extract tool results from user messages in detailed mode
+                        if detailed and entry.get("type") == "user" and "message" in entry:
+                            msg = entry["message"]
+                            if isinstance(msg, dict) and isinstance(msg.get("content"), list):
+                                for item in msg["content"]:
+                                    if isinstance(item, dict) and item.get("type") == "tool_result":
+                                        result_content = item.get("content", "")
+                                        if isinstance(result_content, list):
+                                            result_content = "\n".join(
+                                                sub.get("text", "") for sub in result_content
+                                                if isinstance(sub, dict) and sub.get("type") == "text"
+                                            )
+                                        if result_content and str(result_content).strip():
+                                            conversation.append({
+                                                "role": "tool_result",
+                                                "content": f"📤 Result:\n{result_content}",
+                                                "timestamp": entry.get("timestamp", ""),
+                                            })
 
                     except json.JSONDecodeError:
                         continue
@@ -183,7 +200,7 @@ class ClaudeConversationExtractor:
                         tool_name = item.get("name", "unknown")
                         tool_input = item.get("input", {})
                         text_parts.append(f"\n🔧 Using tool: {tool_name}")
-                        text_parts.append(f"Input: {json.dumps(tool_input, indent=2)}\n")
+                        text_parts.append(f"Input: {json.dumps(tool_input, indent=2, ensure_ascii=False)}\n")
             return "\n".join(text_parts)
         else:
             return str(content)
@@ -401,84 +418,378 @@ class ClaudeConversationExtractor:
         filename = f"claude-conversation-{date_str}-{session_id[:8]}.html"
         output_path = self.output_dir / filename
 
-        # HTML template with modern styling
+        # File extension to highlight.js language mapping
+        ext_to_lang = {
+            '.py': 'python', '.js': 'javascript', '.ts': 'typescript',
+            '.tsx': 'typescript', '.jsx': 'javascript', '.go': 'go',
+            '.rs': 'rust', '.java': 'java', '.rb': 'ruby', '.php': 'php',
+            '.c': 'c', '.cpp': 'cpp', '.h': 'c', '.hpp': 'cpp',
+            '.cs': 'csharp', '.swift': 'swift', '.kt': 'kotlin',
+            '.sh': 'bash', '.zsh': 'bash', '.bash': 'bash',
+            '.html': 'html', '.htm': 'html', '.xml': 'xml',
+            '.css': 'css', '.scss': 'scss', '.less': 'less',
+            '.json': 'json', '.yaml': 'yaml', '.yml': 'yaml',
+            '.toml': 'toml', '.ini': 'ini', '.cfg': 'ini',
+            '.md': 'markdown', '.sql': 'sql', '.r': 'r',
+            '.lua': 'lua', '.vim': 'vim', '.dockerfile': 'dockerfile',
+            '.tf': 'hcl', '.proto': 'protobuf', '.graphql': 'graphql',
+        }
+
+        import html as html_module
+        from pathlib import PurePosixPath
+
+        def _get_lang(file_path_str):
+            ext = PurePosixPath(file_path_str).suffix.lower()
+            return ext_to_lang.get(ext, '')
+
+        def _escape(text):
+            return html_module.escape(str(text))
+
+        def _render_tool_use_html(msg):
+            """Render tool_use message with enhanced formatting for Write/Edit tools."""
+            tool_name = msg.get("tool_name", "")
+            tool_input = msg.get("tool_input", {})
+
+            if tool_name == "Write" or tool_name == "write":
+                file_path = tool_input.get("file_path", tool_input.get("filePath", ""))
+                content = tool_input.get("content", "")
+                lang = _get_lang(file_path)
+                lang_class = f' class="language-{lang}"' if lang else ''
+                line_count = content.count('\n') + 1
+                code_block = f'<pre><code{lang_class}>{_escape(content)}</code></pre>'
+                if line_count > 30:
+                    return (
+                        f'<div class="tool-header">📝 Write → <code>{_escape(file_path)}</code></div>\n'
+                        f'<details>\n'
+                        f'<summary>File content ({line_count} lines) — click to expand</summary>\n'
+                        f'{code_block}\n'
+                        f'</details>'
+                    )
+                return (
+                    f'<div class="tool-header">📝 Write → <code>{_escape(file_path)}</code></div>\n'
+                    f'{code_block}'
+                )
+
+            elif tool_name == "Edit" or tool_name == "edit":
+                file_path = tool_input.get("file_path", tool_input.get("filePath", ""))
+                old_str = tool_input.get("old_string", tool_input.get("oldString", ""))
+                new_str = tool_input.get("new_string", tool_input.get("newString", ""))
+                lang = _get_lang(file_path)
+                lang_label = f' ({lang})' if lang else ''
+
+                diff_html = f'<div class="tool-header">✏️ Edit → <code>{_escape(file_path)}</code>{lang_label}</div>\n'
+                diff_html += '<div class="diff-container">\n'
+
+                # Render old lines (removed)
+                if old_str:
+                    for line in old_str.split('\n'):
+                        diff_html += f'<div class="diff-line diff-removed">- {_escape(line)}</div>\n'
+
+                # Render new lines (added)
+                if new_str:
+                    for line in new_str.split('\n'):
+                        diff_html += f'<div class="diff-line diff-added">+ {_escape(line)}</div>\n'
+
+                diff_html += '</div>'
+                return diff_html
+
+            elif tool_name in ("Read", "read", "Bash", "bash", "Grep", "grep", "Glob", "glob"):
+                # Compact display for common read-only tools
+                parts = [f'<div class="tool-header">🔧 {_escape(tool_name)}</div>']
+                for k, v in tool_input.items():
+                    val = _escape(str(v)) if not isinstance(v, str) else _escape(v)
+                    parts.append(f'<div class="tool-param"><span class="param-key">{_escape(k)}:</span> {val}</div>')
+                return '\n'.join(parts)
+
+            elif tool_name in ("Task", "task"):
+                # Task/agent tool — show description + collapsible prompt
+                desc = tool_input.get("description", "")
+                prompt = tool_input.get("prompt", "")
+                subagent = tool_input.get("subagent_type", "")
+                header = f'<div class="tool-header">🤖 Task'
+                if subagent:
+                    header += f' ({_escape(subagent)})'
+                if desc:
+                    header += f' — {_escape(desc)}'
+                header += '</div>\n'
+                if prompt:
+                    prompt_lines = prompt.count('\n') + 1
+                    if prompt_lines > 10:
+                        return (
+                            f'{header}'
+                            f'<details>\n'
+                            f'<summary>Prompt ({prompt_lines} lines) — click to expand</summary>\n'
+                            f'<pre><code>{_escape(prompt)}</code></pre>\n'
+                            f'</details>'
+                        )
+                    return f'{header}<pre><code>{_escape(prompt)}</code></pre>'
+                return header
+
+            else:
+                # Generic tool display
+                content_json = json.dumps(tool_input, indent=2, ensure_ascii=False)
+                line_count = content_json.count('\n') + 1
+                if line_count > 20:
+                    return (
+                        f'<div class="tool-header">🔧 {_escape(tool_name)}</div>\n'
+                        f'<details>\n'
+                        f'<summary>Parameters ({line_count} lines) — click to expand</summary>\n'
+                        f'<pre><code class="language-json">{_escape(content_json)}</code></pre>\n'
+                        f'</details>'
+                    )
+                return (
+                    f'<div class="tool-header">🔧 {_escape(tool_name)}</div>\n'
+                    f'<pre><code class="language-json">{_escape(content_json)}</code></pre>'
+                )
+
+        # HTML template — Anthropic brand styling
         html_content = f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Claude Conversation - {session_id[:8]}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Lora:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked@14.0.0/marked.min.js"></script>
     <style>
+        :root {{
+            --dark: #141413;
+            --light: #faf9f5;
+            --mid-gray: #b0aea5;
+            --light-gray: #e8e6dc;
+            --orange: #d97757;
+            --blue: #6a9bcc;
+            --green: #788c5d;
+        }}
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            max-width: 900px;
+            font-family: 'Lora', Georgia, 'Noto Serif SC', serif;
+            line-height: 1.7;
+            color: var(--dark);
+            max-width: 960px;
             margin: 0 auto;
-            padding: 20px;
-            background: #f5f5f5;
+            padding: 32px 20px;
+            background: var(--light);
+        }}
+        h1, h2, h3, .role {{
+            font-family: 'Poppins', Arial, 'Noto Sans SC', sans-serif;
         }}
         .header {{
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            background: var(--dark);
+            color: var(--light);
+            padding: 32px 28px;
+            border-radius: 12px;
+            margin-bottom: 28px;
         }}
-        h1 {{
-            color: #2c3e50;
-            margin: 0 0 10px 0;
+        .header h1 {{
+            font-size: 1.5em;
+            font-weight: 600;
+            margin-bottom: 12px;
+            letter-spacing: -0.01em;
         }}
-        .metadata {{
-            color: #666;
-            font-size: 0.9em;
+        .header .metadata {{
+            color: var(--mid-gray);
+            font-family: 'Poppins', Arial, sans-serif;
+            font-size: 0.82em;
+            line-height: 1.8;
         }}
         .message {{
             background: white;
-            padding: 15px 20px;
-            margin-bottom: 15px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 18px 22px;
+            margin-bottom: 14px;
+            border-radius: 10px;
+            border: 1px solid var(--light-gray);
         }}
         .user {{
-            border-left: 4px solid #3498db;
+            border-left: 4px solid var(--blue);
         }}
         .assistant {{
-            border-left: 4px solid #2ecc71;
+            border-left: 4px solid var(--green);
         }}
         .tool_use {{
-            border-left: 4px solid #f39c12;
-            background: #fffbf0;
+            border-left: 4px solid var(--orange);
+            background: #fdfbf8;
         }}
         .tool_result {{
-            border-left: 4px solid #e74c3c;
-            background: #fff5f5;
+            border-left: 4px solid var(--mid-gray);
+            background: #fcfcfa;
         }}
         .system {{
-            border-left: 4px solid #95a5a6;
-            background: #f8f9fa;
+            border-left: 4px solid var(--light-gray);
+            background: #fafaf7;
         }}
         .role {{
-            font-weight: bold;
+            font-weight: 600;
+            font-size: 0.85em;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
             margin-bottom: 10px;
-            display: flex;
-            align-items: center;
+            color: var(--dark);
+            opacity: 0.7;
         }}
         .content {{
             white-space: pre-wrap;
             word-wrap: break-word;
+            font-size: 0.95em;
+        }}
+        .tool-content {{
+            word-wrap: break-word;
+            font-size: 0.95em;
+        }}
+        .tool-header {{
+            font-family: 'Poppins', Arial, sans-serif;
+            font-weight: 600;
+            font-size: 0.88em;
+            margin-bottom: 10px;
+            color: var(--dark);
+            opacity: 0.8;
+        }}
+        .tool-header code {{
+            background: var(--light-gray);
+            color: var(--dark);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }}
+        .tool-param {{
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 0.85em;
+            padding: 3px 0;
+            color: var(--dark);
+            opacity: 0.75;
+        }}
+        .param-key {{
+            color: var(--orange);
+            font-weight: 600;
+        }}
+        /* Diff styles */
+        .diff-container {{
+            font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+            font-size: 0.83em;
+            border: 1px solid var(--light-gray);
+            border-radius: 8px;
+            overflow: hidden;
+            margin: 10px 0;
+        }}
+        .diff-line {{
+            padding: 2px 12px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }}
+        .diff-removed {{
+            background: #fce8e6;
+            color: #8c1d18;
+        }}
+        .diff-added {{
+            background: #e8f5e9;
+            color: #1b5e20;
         }}
         pre {{
-            background: #f4f4f4;
-            padding: 10px;
-            border-radius: 4px;
+            background: #f3f2ed;
+            padding: 14px;
+            border-radius: 8px;
             overflow-x: auto;
+            margin: 10px 0;
+            border: 1px solid var(--light-gray);
+        }}
+        pre code {{
+            background: none;
+            padding: 0;
+            font-size: 0.85em;
         }}
         code {{
-            background: #f4f4f4;
-            padding: 2px 4px;
-            border-radius: 3px;
-            font-family: 'Courier New', monospace;
+            background: var(--light-gray);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+            font-size: 0.88em;
+        }}
+        /* Scrollbar */
+        ::-webkit-scrollbar {{ width: 6px; height: 6px; }}
+        ::-webkit-scrollbar-track {{ background: var(--light); }}
+        ::-webkit-scrollbar-thumb {{ background: var(--mid-gray); border-radius: 3px; }}
+        /* Collapsible sections */
+        details {{
+            margin: 8px 0;
+        }}
+        details summary {{
+            cursor: pointer;
+            font-family: 'Poppins', Arial, sans-serif;
+            font-size: 0.83em;
+            font-weight: 500;
+            color: var(--mid-gray);
+            padding: 4px 0;
+            user-select: none;
+            transition: color 0.15s;
+        }}
+        details summary:hover {{
+            color: var(--dark);
+        }}
+        details[open] summary {{
+            margin-bottom: 6px;
+        }}
+        /* Markdown rendered content */
+        .markdown-content {{
+            font-size: 0.95em;
+            line-height: 1.75;
+        }}
+        .markdown-content p {{
+            margin: 0.4em 0;
+        }}
+        .markdown-content h1, .markdown-content h2, .markdown-content h3,
+        .markdown-content h4, .markdown-content h5, .markdown-content h6 {{
+            font-family: 'Poppins', Arial, sans-serif;
+            margin: 0.8em 0 0.4em;
+            line-height: 1.3;
+        }}
+        .markdown-content h1 {{ font-size: 1.3em; }}
+        .markdown-content h2 {{ font-size: 1.15em; }}
+        .markdown-content h3 {{ font-size: 1.05em; }}
+        .markdown-content ul, .markdown-content ol {{
+            padding-left: 1.5em;
+            margin: 0.4em 0;
+        }}
+        .markdown-content li {{
+            margin: 0.2em 0;
+        }}
+        .markdown-content blockquote {{
+            border-left: 3px solid var(--mid-gray);
+            padding: 0.3em 0 0.3em 1em;
+            margin: 0.5em 0;
+            color: #555;
+        }}
+        .markdown-content table {{
+            border-collapse: collapse;
+            margin: 0.5em 0;
+            font-size: 0.92em;
+        }}
+        .markdown-content th, .markdown-content td {{
+            border: 1px solid var(--light-gray);
+            padding: 6px 12px;
+            text-align: left;
+        }}
+        .markdown-content th {{
+            background: #f3f2ed;
+            font-weight: 600;
+        }}
+        .markdown-content img {{
+            max-width: 100%;
+            border-radius: 6px;
+        }}
+        .markdown-content hr {{
+            border: none;
+            border-top: 1px solid var(--light-gray);
+            margin: 1em 0;
+        }}
+        .markdown-content pre {{
+            margin: 0.5em 0;
+        }}
+        .markdown-content > pre:first-child {{
+            margin-top: 0;
         }}
     </style>
 </head>
@@ -486,7 +797,7 @@ class ClaudeConversationExtractor:
     <div class="header">
         <h1>Claude Conversation Log</h1>
         <div class="metadata">
-            <p>Session ID: {session_id}</p>
+            <p>Session: {session_id}</p>
             <p>Date: {date_str} {time_str}</p>
             <p>Messages: {len(conversation)}</p>
         </div>
@@ -495,30 +806,78 @@ class ClaudeConversationExtractor:
 
         with open(output_path, "w", encoding="utf-8") as f:
             f.write(html_content)
-            
+
             for msg in conversation:
                 role = msg["role"]
-                content = msg["content"]
-                
-                # Escape HTML
-                content = content.replace("&", "&amp;")
-                content = content.replace("<", "&lt;")
-                content = content.replace(">", "&gt;")
-                
+
                 role_display = {
-                    "user": "👤 User",
-                    "assistant": "🤖 Claude",
-                    "tool_use": "🔧 Tool Use",
-                    "tool_result": "📤 Tool Result",
-                    "system": "ℹ️ System"
+                    "user": "Human",
+                    "assistant": "Claude",
+                    "tool_use": "Tool Use",
+                    "tool_result": "Tool Result",
+                    "system": "System"
                 }.get(role, role)
-                
+
                 f.write(f'    <div class="message {role}">\n')
                 f.write(f'        <div class="role">{role_display}</div>\n')
-                f.write(f'        <div class="content">{content}</div>\n')
+
+                if role == "tool_use" and msg.get("tool_name"):
+                    # Enhanced rendering for tool_use
+                    f.write(f'        <div class="tool-content">{_render_tool_use_html(msg)}</div>\n')
+                elif role in ("assistant", "user"):
+                    # Markdown rendering for assistant and user messages
+                    content = _escape(msg["content"])
+                    f.write(f'        <div class="markdown-content">{content}</div>\n')
+                elif role == "tool_result":
+                    # Collapsible for long tool results
+                    raw = msg["content"]
+                    lines = raw.split('\n')
+                    line_count = len(lines)
+                    if line_count > 15:
+                        preview = _escape('\n'.join(lines[:3]))
+                        full = _escape(raw)
+                        f.write(f'        <details class="content">\n')
+                        f.write(f'            <summary>Result ({line_count} lines) — click to expand</summary>\n')
+                        f.write(f'            <pre><code>{full}</code></pre>\n')
+                        f.write(f'        </details>\n')
+                    else:
+                        content = _escape(raw)
+                        f.write(f'        <div class="content">{content}</div>\n')
+                else:
+                    content = _escape(msg["content"])
+                    f.write(f'        <div class="content">{content}</div>\n')
+
                 f.write(f'    </div>\n')
-            
-            f.write("\n</body>\n</html>")
+
+            f.write("""
+    <script>
+    // Configure marked with highlight.js integration
+    marked.setOptions({
+        highlight: function(code, lang) {
+            if (lang && hljs.getLanguage(lang)) {
+                return hljs.highlight(code, {language: lang}).value;
+            }
+            return hljs.highlightAuto(code).value;
+        },
+        breaks: true,
+        gfm: true
+    });
+
+    // Render markdown content
+    document.querySelectorAll('.markdown-content').forEach(function(el) {
+        var raw = el.textContent;
+        el.innerHTML = marked.parse(raw);
+    });
+
+    // Highlight code blocks not handled by marked (tool_use, tool_result, etc.)
+    document.querySelectorAll('pre code[class^="language-"]').forEach(function(block) {
+        if (!block.dataset.highlighted) {
+            hljs.highlightElement(block);
+        }
+    });
+    </script>
+</body>
+</html>""")
 
         return output_path
 
