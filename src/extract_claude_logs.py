@@ -27,6 +27,11 @@ def encode_project_path(path_arg: str) -> str:
 
     Returns:
         The encoded directory name (no path separator, no leading slash).
+
+    Note:
+        Does not validate that the path exists. Follows symlinks via
+        ``Path.resolve()`` — if the caller passed a symlink, the encoded
+        name reflects the symlink target, not the link path.
     """
     resolved = Path(path_arg).expanduser().resolve()
     return str(resolved).replace("/", "-").replace(".", "-")
