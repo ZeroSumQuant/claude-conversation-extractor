@@ -7,10 +7,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from extract_claude_logs import ClaudeConversationExtractor  # noqa: E402
+from extract_claude_logs import ClaudeConversationExtractor, encode_project_path  # noqa: E402
 
 
 class TestClaudeConversationExtractor(unittest.TestCase):
@@ -147,6 +149,42 @@ class TestClaudeConversationExtractor(unittest.TestCase):
         self.assertEqual(sessions[0].stat().st_mtime, 2000)
         self.assertEqual(sessions[1].stat().st_mtime, 1500)
         self.assertEqual(sessions[2].stat().st_mtime, 1000)
+
+
+class TestEncodeProjectPath:
+    """Test suite for encode_project_path helper function."""
+
+    def test_absolute_path(self):
+        """Test encoding an absolute path."""
+        assert encode_project_path("/Users/me/foo") == "-Users-me-foo"
+
+    def test_path_with_dotted_segment(self):
+        """Test that both / and . are replaced with -."""
+        assert encode_project_path("/foo/.bar") == "-foo--bar"
+
+    def test_trailing_slash_normalised(self):
+        """Test that trailing slashes are normalised away."""
+        assert encode_project_path("/Users/me/foo/") == "-Users-me-foo"
+
+    def test_relative_dot_resolves_to_cwd(self, tmp_path, monkeypatch):
+        """Test that . resolves to the current working directory."""
+        monkeypatch.chdir(tmp_path)
+        expected = str(tmp_path.resolve()).replace("/", "-").replace(".", "-")
+        assert encode_project_path(".") == expected
+
+    def test_double_dot_resolves(self, tmp_path, monkeypatch):
+        """Test that .. resolves to parent directory."""
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        monkeypatch.chdir(sub)
+        expected = str(tmp_path.resolve()).replace("/", "-").replace(".", "-")
+        assert encode_project_path("..") == expected
+
+    def test_tilde_expanded(self, monkeypatch, tmp_path):
+        """Test that ~ is expanded to home directory."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        expected = str(tmp_path.resolve()).replace("/", "-").replace(".", "-") + "-foo"
+        assert encode_project_path("~/foo") == expected
 
 
 if __name__ == "__main__":

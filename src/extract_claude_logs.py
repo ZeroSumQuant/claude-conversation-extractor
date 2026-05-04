@@ -14,6 +14,24 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
+def encode_project_path(path_arg: str) -> str:
+    """Map a real filesystem path to Claude Code's project directory name.
+
+    Claude Code stores conversations under ``~/.claude/projects/<encoded>``,
+    where ``<encoded>`` is the project's source path with ``/`` and ``.``
+    each replaced by ``-`` and a leading ``-`` from the absolute root.
+
+    Args:
+        path_arg: Path string. May be absolute, relative, contain ``~``,
+            ``.``, or ``..``. Will be expanded and resolved before encoding.
+
+    Returns:
+        The encoded directory name (no path separator, no leading slash).
+    """
+    resolved = Path(path_arg).expanduser().resolve()
+    return str(resolved).replace("/", "-").replace(".", "-")
+
+
 class ClaudeConversationExtractor:
     """Extract and convert Claude Code conversations from JSONL to markdown."""
 
