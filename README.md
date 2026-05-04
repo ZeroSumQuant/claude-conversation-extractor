@@ -151,7 +151,7 @@ claude-extract --all
 claude-extract --output ~/my-claude-backups
 
 # Filter to a single Claude Code project (e.g. for an end-of-session hook)
-claude-extract --project .                  # cwd's project, interactive UI
+claude-extract --project .                  # cwd's project, list sessions
 claude-extract --project . --recent 1       # most recent session in cwd
 claude-extract --project /path/to/repo --all # all sessions from another path
 ```
