@@ -188,24 +188,30 @@ class TestEncodeProjectPath:
 
 
 class TestProjectFlag:
-    def _make_fake_claude_dir(self, tmp_path, project_name, n_sessions=2):
-        """Build ~/.claude/projects/<project_name>/<i>.jsonl fixture tree."""
+    def _make_fake_claude_dir(
+        self, tmp_path, project_name, n_sessions=2, prefix="session"
+    ):
+        """Build ~/.claude/projects/<project_name>/<prefix>-<i>.jsonl tree."""
         projects = tmp_path / ".claude" / "projects" / project_name
         projects.mkdir(parents=True)
         for i in range(n_sessions):
-            (projects / f"session-{i}.jsonl").write_text(
+            (projects / f"{prefix}-{i}.jsonl").write_text(
                 '{"type":"user","message":{"content":"hi"}}\n'
             )
         return projects
 
     def test_project_flag_filters_list(self, tmp_path, monkeypatch, capsys):
-        # Two projects, --project should only show one
         target = tmp_path / "myrepo"
         target.mkdir()
-        encoded = str(target.resolve()).replace("/", "-").replace(".", "-")
-        self._make_fake_claude_dir(tmp_path, encoded, n_sessions=3)
-        # Different project that should NOT appear in output
-        self._make_fake_claude_dir(tmp_path, "-other-project", n_sessions=2)
+        # Distinct filename prefixes per project so the assertion can prove
+        # the filter excluded the other project rather than just counting hits.
+        self._make_fake_claude_dir(
+            tmp_path, encode_project_path(str(target)),
+            n_sessions=3, prefix="target",
+        )
+        self._make_fake_claude_dir(
+            tmp_path, "-other-project", n_sessions=2, prefix="other",
+        )
 
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         monkeypatch.setattr(
@@ -216,9 +222,8 @@ class TestProjectFlag:
         from extract_claude_logs import main
         main()
         out = capsys.readouterr().out
-        # Three sessions from target project, none from -other-project
-        assert out.count("session-") == 3
-        assert "-other-project" not in out
+        assert out.count("target-") == 3
+        assert "other-" not in out
 
 
 if __name__ == "__main__":
