@@ -225,6 +225,136 @@ class TestProjectFlag:
         assert out.count("target-") == 3
         assert "other-" not in out
 
+    def test_project_flag_missing_dir_exits_nonzero(
+        self, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        (tmp_path / ".claude" / "projects").mkdir(parents=True)
+        monkeypatch.setattr(
+            sys, "argv",
+            ["claude-extract", "--list", "--project", "/no/such/path"]
+        )
+        from extract_claude_logs import main
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 1
+        err = capsys.readouterr().err
+        assert "No Claude Code logs found" in err
+        assert "/no/such/path" in err
+
+    def test_project_flag_with_recent(self, tmp_path, monkeypatch):
+        target = tmp_path / "myrepo"
+        target.mkdir()
+        target_proj = self._make_fake_claude_dir(
+            tmp_path, encode_project_path(str(target)), n_sessions=3, prefix="chat"
+        )
+        # Write real conversation entries to each session file
+        for jsonl_file in target_proj.glob("chat-*.jsonl"):
+            jsonl_file.write_text(
+                json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}
+            ) + "\n"
+                + json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}}
+            ) + "\n"
+            )
+        other_proj = self._make_fake_claude_dir(
+            tmp_path, "-other-project", n_sessions=5, prefix="other"
+        )
+        for jsonl_file in other_proj.glob("other-*.jsonl"):
+            jsonl_file.write_text(
+                json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}
+            ) + "\n"
+                + json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}}
+            ) + "\n"
+            )
+
+        output_dir = tmp_path / "out"
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(sys, "argv", [
+            "claude-extract", "--recent", "1",
+            "--project", str(target),
+            "--output", str(output_dir),
+        ])
+        from extract_claude_logs import main
+        main()
+        # Exactly one file written, drawn from the target project
+        written = list(output_dir.glob("*.md"))
+        assert len(written) == 1
+
+    def test_project_flag_with_all(self, tmp_path, monkeypatch):
+        target = tmp_path / "myrepo"
+        target.mkdir()
+        target_proj = self._make_fake_claude_dir(
+            tmp_path, encode_project_path(str(target)), n_sessions=3, prefix="work"
+        )
+        # Write real conversation entries to each session file
+        for jsonl_file in target_proj.glob("work-*.jsonl"):
+            jsonl_file.write_text(
+                json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}
+            ) + "\n"
+                + json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}}
+            ) + "\n"
+            )
+        other_proj = self._make_fake_claude_dir(
+            tmp_path, "-other-project", n_sessions=5, prefix="other"
+        )
+        for jsonl_file in other_proj.glob("other-*.jsonl"):
+            jsonl_file.write_text(
+                json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}
+            ) + "\n"
+                + json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}}
+            ) + "\n"
+            )
+
+        output_dir = tmp_path / "out"
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(sys, "argv", [
+            "claude-extract", "--all",
+            "--project", str(target),
+            "--output", str(output_dir),
+        ])
+        from extract_claude_logs import main
+        main()
+        # Three sessions from target, none from other
+        written = list(output_dir.glob("*.md"))
+        assert len(written) == 3
+
+    def test_project_flag_with_extract_index(self, tmp_path, monkeypatch):
+        target = tmp_path / "myrepo"
+        target.mkdir()
+        target_proj = self._make_fake_claude_dir(
+            tmp_path, encode_project_path(str(target)), n_sessions=2, prefix="code"
+        )
+        # Write real conversation entries to each session file
+        for jsonl_file in target_proj.glob("code-*.jsonl"):
+            jsonl_file.write_text(
+                json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}
+            ) + "\n"
+                + json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}}
+            ) + "\n"
+            )
+        other_proj = self._make_fake_claude_dir(
+            tmp_path, "-other-project", n_sessions=3, prefix="other"
+        )
+        for jsonl_file in other_proj.glob("other-*.jsonl"):
+            jsonl_file.write_text(
+                json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}
+            ) + "\n"
+                + json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}}
+            ) + "\n"
+            )
+
+        output_dir = tmp_path / "out"
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(sys, "argv", [
+            "claude-extract", "--extract", "1",
+            "--project", str(target),
+            "--output", str(output_dir),
+        ])
+        from extract_claude_logs import main
+        main()
+        written = list(output_dir.glob("*.md"))
+        assert len(written) == 1
+
 
 if __name__ == "__main__":
     unittest.main()
