@@ -149,7 +149,18 @@ claude-extract --all
 
 # Save Claude logs to custom location
 claude-extract --output ~/my-claude-backups
+
+# Filter to a single Claude Code project (e.g. for an end-of-session hook)
+claude-extract --project .                  # cwd's project, interactive UI
+claude-extract --project . --recent 1       # most recent session in cwd
+claude-extract --project /path/to/repo --all # all sessions from another path
 ```
+
+The `--project` flag scopes every session-finding operation (`--list`,
+`--recent`, `--all`, `--extract`) to one Claude Code project. Pass any
+path you'd run Claude Code from. Useful for end-of-session hooks: run
+`claude-extract --project . --recent 1` to export the just-finished
+session and nothing else.
 
 ### 📄 Export Formats - NEW in v1.1.1!
 
