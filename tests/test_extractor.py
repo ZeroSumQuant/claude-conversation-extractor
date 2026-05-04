@@ -191,12 +191,27 @@ class TestProjectFlag:
     def _make_fake_claude_dir(
         self, tmp_path, project_name, n_sessions=2, prefix="session"
     ):
-        """Build ~/.claude/projects/<project_name>/<prefix>-<i>.jsonl tree."""
+        """Build ~/.claude/projects/<project_name>/<prefix>-<i>.jsonl tree.
+
+        Each session file contains a minimal user+assistant exchange so
+        --extract / --recent / --all produce real markdown output.
+        """
         projects = tmp_path / ".claude" / "projects" / project_name
         projects.mkdir(parents=True)
+        user_msg = json.dumps({
+            "type": "user",
+            "message": {"role": "user", "content": "hi"},
+        })
+        assistant_msg = json.dumps({
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "hello"}],
+            },
+        })
         for i in range(n_sessions):
             (projects / f"{prefix}-{i}.jsonl").write_text(
-                '{"type":"user","message":{"content":"hi"}}\n'
+                user_msg + "\n" + assistant_msg + "\n"
             )
         return projects
 
@@ -245,27 +260,13 @@ class TestProjectFlag:
     def test_project_flag_with_recent(self, tmp_path, monkeypatch):
         target = tmp_path / "myrepo"
         target.mkdir()
-        target_proj = self._make_fake_claude_dir(
-            tmp_path, encode_project_path(str(target)), n_sessions=3, prefix="chat"
+        self._make_fake_claude_dir(
+            tmp_path, encode_project_path(str(target)),
+            n_sessions=3, prefix="target",
         )
-        # Write real conversation entries to each session file
-        for jsonl_file in target_proj.glob("chat-*.jsonl"):
-            jsonl_file.write_text(
-                json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}
-            ) + "\n"
-                + json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}}
-            ) + "\n"
-            )
-        other_proj = self._make_fake_claude_dir(
-            tmp_path, "-other-project", n_sessions=5, prefix="other"
+        self._make_fake_claude_dir(
+            tmp_path, "-other-project", n_sessions=5, prefix="other",
         )
-        for jsonl_file in other_proj.glob("other-*.jsonl"):
-            jsonl_file.write_text(
-                json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}
-            ) + "\n"
-                + json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}}
-            ) + "\n"
-            )
 
         output_dir = tmp_path / "out"
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -276,34 +277,19 @@ class TestProjectFlag:
         ])
         from extract_claude_logs import main
         main()
-        # Exactly one file written, drawn from the target project
         written = list(output_dir.glob("*.md"))
         assert len(written) == 1
 
     def test_project_flag_with_all(self, tmp_path, monkeypatch):
         target = tmp_path / "myrepo"
         target.mkdir()
-        target_proj = self._make_fake_claude_dir(
-            tmp_path, encode_project_path(str(target)), n_sessions=3, prefix="work"
+        self._make_fake_claude_dir(
+            tmp_path, encode_project_path(str(target)),
+            n_sessions=3, prefix="target",
         )
-        # Write real conversation entries to each session file
-        for jsonl_file in target_proj.glob("work-*.jsonl"):
-            jsonl_file.write_text(
-                json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}
-            ) + "\n"
-                + json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}}
-            ) + "\n"
-            )
-        other_proj = self._make_fake_claude_dir(
-            tmp_path, "-other-project", n_sessions=5, prefix="other"
+        self._make_fake_claude_dir(
+            tmp_path, "-other-project", n_sessions=5, prefix="other",
         )
-        for jsonl_file in other_proj.glob("other-*.jsonl"):
-            jsonl_file.write_text(
-                json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}
-            ) + "\n"
-                + json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}}
-            ) + "\n"
-            )
 
         output_dir = tmp_path / "out"
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -314,34 +300,19 @@ class TestProjectFlag:
         ])
         from extract_claude_logs import main
         main()
-        # Three sessions from target, none from other
         written = list(output_dir.glob("*.md"))
         assert len(written) == 3
 
     def test_project_flag_with_extract_index(self, tmp_path, monkeypatch):
         target = tmp_path / "myrepo"
         target.mkdir()
-        target_proj = self._make_fake_claude_dir(
-            tmp_path, encode_project_path(str(target)), n_sessions=2, prefix="code"
+        self._make_fake_claude_dir(
+            tmp_path, encode_project_path(str(target)),
+            n_sessions=2, prefix="target",
         )
-        # Write real conversation entries to each session file
-        for jsonl_file in target_proj.glob("code-*.jsonl"):
-            jsonl_file.write_text(
-                json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}
-            ) + "\n"
-                + json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}}
-            ) + "\n"
-            )
-        other_proj = self._make_fake_claude_dir(
-            tmp_path, "-other-project", n_sessions=3, prefix="other"
+        self._make_fake_claude_dir(
+            tmp_path, "-other-project", n_sessions=3, prefix="other",
         )
-        for jsonl_file in other_proj.glob("other-*.jsonl"):
-            jsonl_file.write_text(
-                json.dumps({"type": "user", "message": {"role": "user", "content": "hi"}}
-            ) + "\n"
-                + json.dumps({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}}
-            ) + "\n"
-            )
 
         output_dir = tmp_path / "out"
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
