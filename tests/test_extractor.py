@@ -155,36 +155,39 @@ class TestEncodeProjectPath:
     """Test suite for encode_project_path helper function."""
 
     def test_absolute_path(self):
-        """Test encoding an absolute path."""
         assert encode_project_path("/Users/me/foo") == "-Users-me-foo"
 
     def test_path_with_dotted_segment(self):
-        """Test that both / and . are replaced with -."""
         assert encode_project_path("/foo/.bar") == "-foo--bar"
 
+    def test_underscore_replaced(self):
+        # Claude Code maps underscores to dashes too
+        assert (
+            encode_project_path("/foo/web_blueprint_heist")
+            == "-foo-web-blueprint-heist"
+        )
+
     def test_trailing_slash_normalised(self):
-        """Test that trailing slashes are normalised away."""
         assert encode_project_path("/Users/me/foo/") == "-Users-me-foo"
 
     def test_relative_dot_resolves_to_cwd(self, tmp_path, monkeypatch):
-        """Test that . resolves to the current working directory."""
+        # tmp_path itself may contain non-alphanumerics, so use the encoder
+        # for the expected value — this is an equivalence test on resolution.
         monkeypatch.chdir(tmp_path)
-        expected = str(tmp_path.resolve()).replace("/", "-").replace(".", "-")
-        assert encode_project_path(".") == expected
+        assert encode_project_path(".") == encode_project_path(str(tmp_path))
 
     def test_double_dot_resolves(self, tmp_path, monkeypatch):
-        """Test that .. resolves to parent directory."""
         sub = tmp_path / "sub"
         sub.mkdir()
         monkeypatch.chdir(sub)
-        expected = str(tmp_path.resolve()).replace("/", "-").replace(".", "-")
-        assert encode_project_path("..") == expected
+        assert encode_project_path("..") == encode_project_path(str(tmp_path))
 
     def test_tilde_expanded(self, monkeypatch, tmp_path):
-        """Test that ~ is expanded to home directory."""
         monkeypatch.setenv("HOME", str(tmp_path))
-        expected = str(tmp_path.resolve()).replace("/", "-").replace(".", "-") + "-foo"
-        assert encode_project_path("~/foo") == expected
+        assert (
+            encode_project_path("~/foo")
+            == encode_project_path(str(tmp_path / "foo"))
+        )
 
 
 class TestProjectFlag:

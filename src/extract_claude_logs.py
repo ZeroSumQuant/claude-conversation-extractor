@@ -9,18 +9,24 @@ readable markdown files.
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 
+_NON_ALNUM = re.compile(r"[^a-zA-Z0-9-]")
+
+
 def encode_project_path(path_arg: str) -> str:
     """Map a real filesystem path to Claude Code's project directory name.
 
     Claude Code stores conversations under ``~/.claude/projects/<encoded>``,
-    where ``<encoded>`` is the project's source path with ``/`` and ``.``
-    each replaced by ``-`` and a leading ``-`` from the absolute root.
+    where ``<encoded>`` is the project's absolute source path with every
+    non-alphanumeric character (``/``, ``.``, ``_``, and friends) replaced
+    by ``-``. Empirically verified against the directories Claude Code
+    creates for paths containing slashes, dots, and underscores.
 
     Args:
         path_arg: Path string. May be absolute, relative, contain ``~``,
@@ -35,7 +41,7 @@ def encode_project_path(path_arg: str) -> str:
         name reflects the symlink target, not the link path.
     """
     resolved = Path(path_arg).expanduser().resolve()
-    return str(resolved).replace("/", "-").replace(".", "-")
+    return _NON_ALNUM.sub("-", str(resolved))
 
 
 class ClaudeConversationExtractor:
