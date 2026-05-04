@@ -187,5 +187,39 @@ class TestEncodeProjectPath:
         assert encode_project_path("~/foo") == expected
 
 
+class TestProjectFlag:
+    def _make_fake_claude_dir(self, tmp_path, project_name, n_sessions=2):
+        """Build ~/.claude/projects/<project_name>/<i>.jsonl fixture tree."""
+        projects = tmp_path / ".claude" / "projects" / project_name
+        projects.mkdir(parents=True)
+        for i in range(n_sessions):
+            (projects / f"session-{i}.jsonl").write_text(
+                '{"type":"user","message":{"content":"hi"}}\n'
+            )
+        return projects
+
+    def test_project_flag_filters_list(self, tmp_path, monkeypatch, capsys):
+        # Two projects, --project should only show one
+        target = tmp_path / "myrepo"
+        target.mkdir()
+        encoded = str(target.resolve()).replace("/", "-").replace(".", "-")
+        self._make_fake_claude_dir(tmp_path, encoded, n_sessions=3)
+        # Different project that should NOT appear in output
+        self._make_fake_claude_dir(tmp_path, "-other-project", n_sessions=2)
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(
+            sys, "argv",
+            ["claude-extract", "--list", "--project", str(target)]
+        )
+
+        from extract_claude_logs import main
+        main()
+        out = capsys.readouterr().out
+        # Three sessions from target project, none from -other-project
+        assert out.count("session-") == 3
+        assert "-other-project" not in out
+
+
 if __name__ == "__main__":
     unittest.main()

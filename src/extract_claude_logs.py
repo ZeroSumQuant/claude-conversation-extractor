@@ -9,6 +9,7 @@ readable markdown files.
 
 import argparse
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -647,9 +648,9 @@ class ClaudeConversationExtractor:
         except Exception as e:
             return f"Error: {str(e)[:30]}", 0
 
-    def list_recent_sessions(self, limit: int = None) -> List[Path]:
+    def list_recent_sessions(self, limit: int = None, project_path: Optional[str] = None) -> List[Path]:
         """List recent sessions with details."""
-        sessions = self.find_sessions()
+        sessions = self.find_sessions(project_path=project_path)
 
         if not sessions:
             print("❌ No Claude sessions found in ~/.claude/projects/")
@@ -761,6 +762,16 @@ Examples:
         "--limit", type=int, help="Limit for --list command (default: show all)", default=None
     )
     parser.add_argument(
+        "--project",
+        type=str,
+        default=None,
+        help=(
+            "Filter to one Claude Code project. Pass a path "
+            "(e.g. --project . or --project /path/to/repo). "
+            "Resolved relative to cwd."
+        ),
+    )
+    parser.add_argument(
         "--interactive",
         "-i",
         "--start",
@@ -818,6 +829,18 @@ Examples:
 
         interactive_main()
         return
+
+    project_filter = None
+    if args.project:
+        project_filter = encode_project_path(args.project)
+        project_dir = Path.home() / ".claude" / "projects" / project_filter
+        if not project_dir.exists():
+            resolved = Path(args.project).expanduser().resolve()
+            print(
+                f"No Claude Code logs found for {resolved}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     # Initialize extractor with optional output directory
     extractor = ClaudeConversationExtractor(args.output)
@@ -931,7 +954,7 @@ Examples:
         and not args.search
         and not args.search_regex
     ):
-        sessions = extractor.list_recent_sessions(args.limit)
+        sessions = extractor.list_recent_sessions(args.limit, project_path=project_filter)
 
         if sessions and not args.list:
             print("\nTo extract conversations:")
@@ -940,7 +963,7 @@ Examples:
             print("  claude-extract --all                   # Extract all sessions")
 
     elif args.extract:
-        sessions = extractor.find_sessions()
+        sessions = extractor.find_sessions(project_path=project_filter)
 
         # Parse comma-separated indices
         indices = []
@@ -962,7 +985,7 @@ Examples:
             print(f"\n✅ Successfully extracted {success}/{total} sessions")
 
     elif args.recent:
-        sessions = extractor.find_sessions()
+        sessions = extractor.find_sessions(project_path=project_filter)
         limit = min(args.recent, len(sessions))
         print(f"\n📤 Extracting {limit} most recent sessions as {args.format.upper()}...")
         if args.detailed:
@@ -975,7 +998,7 @@ Examples:
         print(f"\n✅ Successfully extracted {success}/{total} sessions")
 
     elif args.all:
-        sessions = extractor.find_sessions()
+        sessions = extractor.find_sessions(project_path=project_filter)
         print(f"\n📤 Extracting all {len(sessions)} sessions as {args.format.upper()}...")
         if args.detailed:
             print("📋 Including detailed tool use and system messages")
