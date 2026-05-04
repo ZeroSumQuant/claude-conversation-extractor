@@ -51,7 +51,7 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -e .
 
 # Install development dependencies
-pip install -r requirements-dev.txt
+pip install -r requirements/dev.txt
 ```
 
 #### Development Workflow for Claude Export Features
