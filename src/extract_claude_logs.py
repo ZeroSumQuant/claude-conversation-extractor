@@ -284,6 +284,17 @@ class ClaudeConversationExtractor:
             print(f"❌ Error displaying conversation: {e}")
             input("\nPress Enter to continue...")
 
+    @staticmethod
+    def _format_timestamp(timestamp_str: str) -> str:
+        """Format an ISO timestamp string for display. Returns empty string if unavailable."""
+        if not timestamp_str:
+            return ""
+        try:
+            dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return ""
+
     def save_as_markdown(
         self, conversation: List[Dict[str, str]], session_id: str
     ) -> Optional[Path]:
@@ -320,24 +331,26 @@ class ClaudeConversationExtractor:
             for msg in conversation:
                 role = msg["role"]
                 content = msg["content"]
-                
+                ts = self._format_timestamp(msg.get("timestamp", ""))
+                ts_suffix = f" [{ts}]" if ts else ""
+
                 if role == "user":
-                    f.write("## 👤 User\n\n")
+                    f.write(f"## 👤 User{ts_suffix}\n\n")
                     f.write(f"{content}\n\n")
                 elif role == "assistant":
-                    f.write("## 🤖 Claude\n\n")
+                    f.write(f"## 🤖 Claude{ts_suffix}\n\n")
                     f.write(f"{content}\n\n")
                 elif role == "tool_use":
-                    f.write("### 🔧 Tool Use\n\n")
+                    f.write(f"### 🔧 Tool Use{ts_suffix}\n\n")
                     f.write(f"{content}\n\n")
                 elif role == "tool_result":
-                    f.write("### 📤 Tool Result\n\n")
+                    f.write(f"### 📤 Tool Result{ts_suffix}\n\n")
                     f.write(f"{content}\n\n")
                 elif role == "system":
-                    f.write("### ℹ️ System\n\n")
+                    f.write(f"### ℹ️ System{ts_suffix}\n\n")
                     f.write(f"{content}\n\n")
                 else:
-                    f.write(f"## {role}\n\n")
+                    f.write(f"## {role}{ts_suffix}\n\n")
                     f.write(f"{content}\n\n")
                 f.write("---\n\n")
 
@@ -499,12 +512,13 @@ class ClaudeConversationExtractor:
             for msg in conversation:
                 role = msg["role"]
                 content = msg["content"]
-                
+                ts = self._format_timestamp(msg.get("timestamp", ""))
+
                 # Escape HTML
                 content = content.replace("&", "&amp;")
                 content = content.replace("<", "&lt;")
                 content = content.replace(">", "&gt;")
-                
+
                 role_display = {
                     "user": "👤 User",
                     "assistant": "🤖 Claude",
@@ -512,9 +526,10 @@ class ClaudeConversationExtractor:
                     "tool_result": "📤 Tool Result",
                     "system": "ℹ️ System"
                 }.get(role, role)
-                
+                ts_html = f' <span style="font-weight:normal;color:#999;font-size:0.85em">[{ts}]</span>' if ts else ""
+
                 f.write(f'    <div class="message {role}">\n')
-                f.write(f'        <div class="role">{role_display}</div>\n')
+                f.write(f'        <div class="role">{role_display}{ts_html}</div>\n')
                 f.write(f'        <div class="content">{content}</div>\n')
                 f.write(f'    </div>\n')
             
