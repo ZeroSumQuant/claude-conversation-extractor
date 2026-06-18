@@ -1,5 +1,6 @@
 """Tests for Claude Conversation Extractor"""
 
+import builtins
 import json
 import sys
 import tempfile
@@ -122,6 +123,53 @@ class TestClaudeConversationExtractor(unittest.TestCase):
         self.assertEqual(conversation[0]["content"], "Test message")
         self.assertEqual(conversation[1]["role"], "assistant")
         self.assertEqual(conversation[1]["content"], "Test response")
+
+    def test_extract_conversation_reuses_cached_parse_for_unchanged_file(self):
+        """Test extracting an unchanged conversation does not reopen the JSONL."""
+        jsonl_file = Path(self.temp_dir) / "test.jsonl"
+        jsonl_file.write_text(
+            json.dumps(
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": "Test message"},
+                    "timestamp": "2025-05-25T10:00:00Z",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        original_open = builtins.open
+        opens = []
+
+        def counting_open(path, *args, **kwargs):
+            if Path(path) == jsonl_file:
+                opens.append(path)
+            return original_open(path, *args, **kwargs)
+
+        with patch("builtins.open", side_effect=counting_open):
+            first = self.extractor.extract_conversation(jsonl_file)
+            second = self.extractor.extract_conversation(jsonl_file)
+
+            jsonl_file.write_text(
+                json.dumps(
+                    {
+                        "type": "user",
+                        "message": {
+                            "role": "user",
+                            "content": "Updated test message",
+                        },
+                        "timestamp": "2025-05-25T10:00:00Z",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            third = self.extractor.extract_conversation(jsonl_file)
+
+        self.assertEqual(first, second)
+        self.assertEqual(third[0]["content"], "Updated test message")
+        self.assertEqual(len(opens), 2)
 
     def test_extract_conversation_invalid_file(self):
         """Test extracting conversation from non-existent file"""
