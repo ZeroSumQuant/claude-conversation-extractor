@@ -20,6 +20,9 @@ class ClaudeConversationExtractor:
     def __init__(self, output_dir: Optional[Path] = None):
         """Initialize the extractor with Claude's directory and output location."""
         self.claude_dir = Path.home() / ".claude" / "projects"
+        self._conversation_cache: Dict[
+            Tuple[Path, bool, int, int], List[Dict[str, str]]
+        ] = {}
 
         if output_dir:
             self.output_dir = Path(output_dir)
@@ -65,13 +68,28 @@ class ClaudeConversationExtractor:
                 sessions.append(jsonl_file)
         return sorted(sessions, key=lambda x: x.stat().st_mtime, reverse=True)
 
-    def extract_conversation(self, jsonl_path: Path, detailed: bool = False) -> List[Dict[str, str]]:
+    def extract_conversation(
+        self, jsonl_path: Path, detailed: bool = False
+    ) -> List[Dict[str, str]]:
         """Extract conversation messages from a JSONL file.
-        
+
         Args:
             jsonl_path: Path to the JSONL file
             detailed: If True, include tool use, MCP responses, and system messages
         """
+        jsonl_path = Path(jsonl_path)
+        cache_key = None
+
+        try:
+            file_stat = jsonl_path.stat()
+            cache_path = jsonl_path.resolve()
+            cache_key = (cache_path, detailed, file_stat.st_mtime_ns, file_stat.st_size)
+            cached_conversation = self._conversation_cache.get(cache_key)
+            if cached_conversation is not None:
+                return [message.copy() for message in cached_conversation]
+        except Exception:
+            pass
+
         conversation = []
 
         try:
@@ -122,7 +140,10 @@ class ClaudeConversationExtractor:
                                 conversation.append(
                                     {
                                         "role": "tool_use",
-                                        "content": f"🔧 Tool: {tool_name}\nInput: {json.dumps(tool_input, indent=2)}",
+                                        "content": (
+                                            f"🔧 Tool: {tool_name}\n"
+                                            f"Input: {json.dumps(tool_input, indent=2)}"
+                                        ),
                                         "timestamp": entry.get("timestamp", ""),
                                     }
                                 )
@@ -159,6 +180,23 @@ class ClaudeConversationExtractor:
 
         except Exception as e:
             print(f"❌ Error reading file {jsonl_path}: {e}")
+
+        if cache_key is not None:
+            cache_path, cache_detailed, _, _ = cache_key
+            stale_keys = [
+                key
+                for key in self._conversation_cache
+                if (
+                    key[0] == cache_path
+                    and key[1] == cache_detailed
+                    and key != cache_key
+                )
+            ]
+            for stale_key in stale_keys:
+                del self._conversation_cache[stale_key]
+            self._conversation_cache[cache_key] = [
+                message.copy() for message in conversation
+            ]
 
         return conversation
 
