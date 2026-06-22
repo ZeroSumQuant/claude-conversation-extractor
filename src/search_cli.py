@@ -4,7 +4,7 @@ Simple CLI search for Claude conversations without terminal control.
 This is used when running `claude-search` from the command line.
 """
 
-import sys
+import argparse
 
 # Handle both package and direct execution imports
 try:
@@ -20,12 +20,19 @@ except ImportError:
 
 def main():
     """Main entry point for CLI search."""
-    # Get search term from stdin or arguments
-    if len(sys.argv) > 1:
-        # Search term provided as argument
-        search_term = " ".join(sys.argv[1:])
+    parser = argparse.ArgumentParser(description="Search extracted conversations")
+    parser.add_argument("search_term", nargs="*", help="Search terms")
+    parser.add_argument(
+        "--copilot",
+        action="store_true",
+        help="Search GitHub Copilot CLI sessions from ~/.copilot/session-state",
+    )
+    args = parser.parse_args()
+    source = "copilot" if args.copilot else "claude"
+
+    if args.search_term:
+        search_term = " ".join(args.search_term)
     else:
-        # Prompt for search term
         try:
             search_term = input("🔍 Enter search term: ").strip()
         except (EOFError, KeyboardInterrupt):
@@ -40,7 +47,7 @@ def main():
     print("=" * 60)
     
     # Initialize searcher
-    searcher = ConversationSearcher()
+    searcher = ConversationSearcher(source=source)
     smart_searcher = create_smart_searcher(searcher)
     
     # Perform search
@@ -60,16 +67,16 @@ def main():
         # Display results
         sessions = []
         session_paths = []
-        extractor = ClaudeConversationExtractor()
+        extractor = ClaudeConversationExtractor(source=source)
         all_sessions = extractor.find_sessions()
         
         for i, (fname, file_results) in enumerate(by_file.items(), 1):
-            session_id = fname.replace('.jsonl', '')
+            session_id = extractor._get_session_id(file_results[0].file_path)
             sessions.append((fname, session_id))
             
             # Find the actual file path
             for session_path in all_sessions:
-                if session_path.name == fname:
+                if session_path == file_results[0].file_path:
                     session_paths.append(session_path)
                     break
             

@@ -19,6 +19,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
+try:
+    from .source_config import get_source_config, normalize_source
+except ImportError:
+    from source_config import get_source_config, normalize_source
+
 # Optional NLP imports for semantic search
 try:
     import spacy
@@ -62,14 +67,16 @@ class ConversationSearcher:
     Provides multiple search modes and intelligent ranking.
     """
 
-    def __init__(self, cache_dir: Optional[Path] = None):
+    def __init__(self, cache_dir: Optional[Path] = None, source: str = "claude"):
         """
         Initialize the searcher.
 
         Args:
             cache_dir: Optional directory for caching processed conversations
         """
-        self.cache_dir = cache_dir or Path.home() / ".claude" / ".search_cache"
+        self.source = normalize_source(source)
+        self.source_config = get_source_config(self.source)
+        self.cache_dir = cache_dir or self.source_config["cache_dir"]
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize NLP if available
@@ -154,7 +161,7 @@ class ConversationSearcher:
         """
         # Default search directory
         if search_dir is None:
-            search_dir = Path.home() / ".claude" / "projects"
+            search_dir = self.source_config["session_dir"]
 
         # Validate search directory
         if not search_dir.exists():
@@ -165,7 +172,7 @@ class ConversationSearcher:
             return []
 
         # Find all JSONL files
-        jsonl_files = list(search_dir.rglob("*.jsonl"))
+        jsonl_files = list(search_dir.rglob(self.source_config["session_glob"]))
         if not jsonl_files:
             return []
 
@@ -234,7 +241,7 @@ class ConversationSearcher:
         Uses exact matching, fuzzy matching, and semantic similarity.
         """
         results = []
-        conversation_id = jsonl_file.stem
+        conversation_id = self._get_conversation_id(jsonl_file)
 
         # Process query
         if not case_sensitive:
@@ -253,10 +260,8 @@ class ConversationSearcher:
                         entry = json.loads(line.strip())
 
                         # Extract message based on entry type
-                        if entry.get("type") in ["user", "assistant"]:
-                            speaker = (
-                                "human" if entry["type"] == "user" else "assistant"
-                            )
+                        if self._is_message_entry(entry):
+                            speaker = self._get_speaker(entry)
 
                             # Apply speaker filter
                             if speaker_filter and speaker != speaker_filter:
@@ -318,7 +323,7 @@ class ConversationSearcher:
     ) -> List[SearchResult]:
         """Exact string matching search."""
         results = []
-        conversation_id = jsonl_file.stem
+        conversation_id = self._get_conversation_id(jsonl_file)
 
         search_query = query if case_sensitive else query.lower()
 
@@ -330,10 +335,8 @@ class ConversationSearcher:
                     try:
                         entry = json.loads(line.strip())
 
-                        if entry.get("type") in ["user", "assistant"]:
-                            speaker = (
-                                "human" if entry["type"] == "user" else "assistant"
-                            )
+                        if self._is_message_entry(entry):
+                            speaker = self._get_speaker(entry)
 
                             if speaker_filter and speaker != speaker_filter:
                                 continue
@@ -395,7 +398,7 @@ class ConversationSearcher:
     ) -> List[SearchResult]:
         """Regex pattern matching search."""
         results = []
-        conversation_id = jsonl_file.stem
+        conversation_id = self._get_conversation_id(jsonl_file)
 
         # Compile regex pattern
         try:
@@ -413,10 +416,8 @@ class ConversationSearcher:
                     try:
                         entry = json.loads(line.strip())
 
-                        if entry.get("type") in ["user", "assistant"]:
-                            speaker = (
-                                "human" if entry["type"] == "user" else "assistant"
-                            )
+                        if self._is_message_entry(entry):
+                            speaker = self._get_speaker(entry)
 
                             if speaker_filter and speaker != speaker_filter:
                                 continue
@@ -480,7 +481,7 @@ class ConversationSearcher:
             return []
 
         results = []
-        conversation_id = jsonl_file.stem
+        conversation_id = self._get_conversation_id(jsonl_file)
 
         # Process query with spaCy
         query_doc = self.nlp(query.lower())
@@ -496,10 +497,8 @@ class ConversationSearcher:
                     try:
                         entry = json.loads(line.strip())
 
-                        if entry.get("type") in ["user", "assistant"]:
-                            speaker = (
-                                "human" if entry["type"] == "user" else "assistant"
-                            )
+                        if self._is_message_entry(entry):
+                            speaker = self._get_speaker(entry)
 
                             if speaker_filter and speaker != speaker_filter:
                                 continue
@@ -552,6 +551,20 @@ class ConversationSearcher:
 
     def _extract_content(self, entry: Dict) -> str:
         """Extract text content from a JSONL entry."""
+        if entry.get("type") == "user.message":
+            data = entry.get("data", {})
+            return self._extract_copilot_content(
+                data.get("content", "") or data.get("transformedContent", "")
+            )
+
+        if entry.get("type") == "assistant.message":
+            data = entry.get("data", {})
+            content = self._extract_copilot_content(data.get("content", ""))
+            reasoning = self._extract_copilot_content(data.get("reasoningText", ""))
+            if content and reasoning:
+                return f"{content}\n{reasoning}"
+            return content or reasoning
+
         # Handle test format (type: user/assistant, content: string)
         if entry.get("type") in ["user", "assistant"] and "content" in entry:
             content = entry["content"]
@@ -578,6 +591,41 @@ class ConversationSearcher:
                     return content
 
         return ""
+
+    def _extract_copilot_content(self, content) -> str:
+        """Extract text from Copilot event content payloads."""
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = [self._extract_copilot_content(item) for item in content]
+            return " ".join(part for part in parts if part)
+        if isinstance(content, dict):
+            text = content.get("text")
+            if isinstance(text, str):
+                return text
+            return json.dumps(content, ensure_ascii=False)
+        return ""
+
+    def _is_message_entry(self, entry: Dict) -> bool:
+        """Return True for searchable user/assistant messages."""
+        return entry.get("type") in {
+            "user",
+            "assistant",
+            "user.message",
+            "assistant.message",
+        }
+
+    def _get_speaker(self, entry: Dict) -> str:
+        """Normalize entry type to human/assistant speaker labels."""
+        if entry.get("type") in {"user", "user.message"}:
+            return "human"
+        return "assistant"
+
+    def _get_conversation_id(self, jsonl_file: Path) -> str:
+        """Return a stable conversation identifier for a session file."""
+        if jsonl_file.name == "events.jsonl":
+            return jsonl_file.parent.name
+        return jsonl_file.stem
 
     def _calculate_relevance(
         self, content: str, query: str, query_tokens: Set[str], case_sensitive: bool
@@ -701,9 +749,9 @@ class ConversationSearcher:
     ) -> List[Path]:
         """Find all conversation files within a date range."""
         if search_dir is None:
-            search_dir = Path.home() / ".claude" / "projects"
+            search_dir = self.source_config["session_dir"]
 
-        jsonl_files = list(search_dir.rglob("*.jsonl"))
+        jsonl_files = list(search_dir.rglob(self.source_config["session_glob"]))
         return self._filter_files_by_date(jsonl_files, date_from, date_to)
 
     def get_conversation_topics(

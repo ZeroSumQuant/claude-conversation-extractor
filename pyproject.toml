@@ -55,7 +55,7 @@ claude-start = "extract_claude_logs:launch_interactive"
 claude-search = "search_cli:main"
 
 [tool.setuptools]
-py-modules = ["extract_claude_logs", "interactive_ui", "search_conversations", "realtime_search", "search_cli"]
+py-modules = ["extract_claude_logs", "interactive_ui", "search_conversations", "realtime_search", "search_cli", "source_config"]
 
 [tool.setuptools.package-dir]
 "" = "src"

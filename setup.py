@@ -81,6 +81,7 @@ setup(
         "search_conversations",
         "realtime_search",
         "search_cli",
+        "source_config",
     ],
     entry_points={
         "console_scripts": [

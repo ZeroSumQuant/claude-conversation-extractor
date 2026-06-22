@@ -14,20 +14,24 @@ try:
     from .extract_claude_logs import ClaudeConversationExtractor
     from .realtime_search import RealTimeSearch, create_smart_searcher
     from .search_conversations import ConversationSearcher
+    from .source_config import get_source_config, normalize_source
 except ImportError:
     # Fallback for direct execution or when not installed as package
     from extract_claude_logs import ClaudeConversationExtractor
     from realtime_search import RealTimeSearch, create_smart_searcher
     from search_conversations import ConversationSearcher
+    from source_config import get_source_config, normalize_source
 
 
 class InteractiveUI:
     """Interactive terminal UI for easier conversation extraction"""
 
-    def __init__(self, output_dir: Optional[str] = None):
+    def __init__(self, output_dir: Optional[str] = None, source: str = "claude"):
         self.output_dir = output_dir
-        self.extractor = ClaudeConversationExtractor(output_dir)
-        self.searcher = ConversationSearcher()
+        self.source = normalize_source(source)
+        self.source_config = get_source_config(self.source)
+        self.extractor = ClaudeConversationExtractor(output_dir, source=self.source)
+        self.searcher = ConversationSearcher(source=self.source)
         self.sessions: List[Path] = []
         self.terminal_width = shutil.get_terminal_size().columns
 
@@ -75,10 +79,10 @@ class InteractiveUI:
         # Suggest common locations
         home = Path.home()
         suggestions = [
-            home / "Desktop" / "Claude Conversations",
-            home / "Documents" / "Claude Conversations",
-            home / "Downloads" / "Claude Conversations",
-            Path.cwd() / "Claude Conversations",
+            home / "Desktop" / self.source_config["interactive_output_name"],
+            home / "Documents" / self.source_config["interactive_output_name"],
+            home / "Downloads" / self.source_config["interactive_output_name"],
+            Path.cwd() / self.source_config["interactive_output_name"],
         ]
 
         print("Suggested locations:")
@@ -108,12 +112,12 @@ class InteractiveUI:
         self.print_banner()
 
         # Get all sessions
-        print("\n🔍 Finding your Claude conversations...")
+        print(f"\n🔍 Finding your {self.source_config['display_name']} conversations...")
         self.sessions = self.extractor.find_sessions()
 
         if not self.sessions:
-            print("\n❌ No Claude conversations found!")
-            print("Make sure you've used Claude Code at least once.")
+            print(f"\n❌ No {self.source_config['display_name']} conversations found!")
+            print(f"Make sure you've used {self.source_config['display_name']} at least once.")
             input("\nPress Enter to exit...")
             return []
 
@@ -121,7 +125,7 @@ class InteractiveUI:
 
         # Display sessions
         for i, session_path in enumerate(self.sessions[:20], 1):  # Show max 20
-            project = session_path.parent.name
+            project = self.extractor._get_session_display_name(session_path)
             modified = datetime.fromtimestamp(session_path.stat().st_mtime)
             size_kb = session_path.stat().st_size / 1024
 
@@ -274,9 +278,9 @@ class InteractiveUI:
             input("\nPress Enter to exit...")
 
 
-def main():
+def main(source: str = "claude"):
     """Entry point for interactive UI"""
-    ui = InteractiveUI()
+    ui = InteractiveUI(source=source)
     ui.run()
 
 

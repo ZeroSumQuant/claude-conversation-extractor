@@ -17,6 +17,8 @@
 
 **Export Claude Code conversations with the #1 extraction tool.** Claude Code stores chats in ~/.claude/projects as JSONL files with no export button - this tool solves that.
 
+GitHub Copilot CLI sessions are also supported with `--copilot`, which reads from `~/.copilot/session-state/`.
+
 🔥 **What users search for:** [Export Claude conversations](#how-to-export-claude-code-conversations) | [Claude Code logs location](#where-are-claude-code-logs-stored) | [Backup Claude sessions](#backup-all-claude-conversations) | [Claude JSONL to Markdown](#convert-claude-jsonl-to-markdown)
 
 ## 📸 How to Export Claude Code Conversations - Demo
@@ -149,6 +151,15 @@ claude-extract --all
 
 # Save Claude logs to custom location
 claude-extract --output ~/my-claude-backups
+
+# List Copilot CLI sessions instead of Claude Code sessions
+claude-extract --copilot --list
+
+# Export recent Copilot CLI sessions
+claude-extract --copilot --recent 5
+
+# Search Copilot CLI sessions
+claude-extract --copilot --search "tool.execution_complete"
 ```
 
 ### 📄 Export Formats - NEW in v1.1.1!
@@ -211,6 +222,10 @@ claude-extract
 - **Windows**: `%USERPROFILE%\.claude\projects\*\chat_*.jsonl`
 - **Format**: Undocumented JSONL with base64 encoded content
 
+### GitHub Copilot CLI Default Locations:
+- **macOS/Linux**: `~/.copilot/session-state/*/events.jsonl`
+- **Format**: Per-session JSONL event streams with user, assistant, and tool events
+
 ### Exported Claude Conversation Locations:
 ```text
 ~/Desktop/Claude logs/claude-conversation-2025-06-09-abc123.md
@@ -219,6 +234,8 @@ claude-extract
 ├── Claude responses with 🤖 prefix
 └── Clean Markdown formatting
 ```
+
+When `--copilot` is active, the default export destination changes to `~/Desktop/Copilot logs/` and exported files use the `copilot-conversation-*` prefix.
 
 ## ❓ Frequently Asked Questions
 
