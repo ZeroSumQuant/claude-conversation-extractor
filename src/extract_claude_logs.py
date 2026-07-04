@@ -20,6 +20,10 @@ class ClaudeConversationExtractor:
     def __init__(self, output_dir: Optional[Path] = None):
         """Initialize the extractor with Claude's directory and output location."""
         self.claude_dir = Path.home() / ".claude" / "projects"
+        # Populated by extract_conversation() for the most recently parsed session,
+        # so save_as_markdown()/save_as_json() can attach cwd/project metadata without
+        # changing their call signatures.
+        self._last_cwd = ""
 
         if output_dir:
             self.output_dir = Path(output_dir)
@@ -73,12 +77,16 @@ class ClaudeConversationExtractor:
             detailed: If True, include tool use, MCP responses, and system messages
         """
         conversation = []
+        self._last_cwd = ""
 
         try:
             with open(jsonl_path, "r", encoding="utf-8") as f:
                 for line in f:
                     try:
                         entry = json.loads(line.strip())
+
+                        if not self._last_cwd and entry.get("cwd"):
+                            self._last_cwd = entry["cwd"]
 
                         # Extract user messages
                         if entry.get("type") == "user" and "message" in entry:
@@ -310,6 +318,12 @@ class ClaudeConversationExtractor:
         output_path = self.output_dir / filename
 
         with open(output_path, "w", encoding="utf-8") as f:
+            if self._last_cwd:
+                project = Path(self._last_cwd).name
+                f.write("---\n")
+                f.write(f'cwd: "{self._last_cwd}"\n')
+                f.write(f"project: {project}\n")
+                f.write("---\n\n")
             f.write("# Claude Conversation Log\n\n")
             f.write(f"Session ID: {session_id}\n")
             f.write(f"Date: {date_str}")
@@ -368,6 +382,8 @@ class ClaudeConversationExtractor:
         output = {
             "session_id": session_id,
             "date": date_str,
+            "cwd": self._last_cwd,
+            "project": Path(self._last_cwd).name if self._last_cwd else "",
             "message_count": len(conversation),
             "messages": conversation
         }
