@@ -323,6 +323,7 @@ class ClaudeConversationExtractor:
                 f.write("---\n")
                 f.write(f'cwd: "{self._last_cwd}"\n')
                 f.write(f"project: {project}\n")
+                f.write(f'session_id: "{session_id}"\n')
                 f.write("---\n\n")
             f.write("# Claude Conversation Log\n\n")
             f.write(f"Session ID: {session_id}\n")
