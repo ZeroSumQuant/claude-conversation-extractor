@@ -96,6 +96,15 @@ class ClaudeConversationExtractor:
                                         }
                                     )
 
+                                # Tool results arrive as content blocks of a
+                                # user entry, not as entries of their own.
+                                if detailed:
+                                    conversation.extend(
+                                        self._extract_tool_results(
+                                            content, entry.get("timestamp", "")
+                                        )
+                                    )
+
                         # Extract assistant messages
                         elif entry.get("type") == "assistant" and "message" in entry:
                             msg = entry["message"]
@@ -111,7 +120,15 @@ class ClaudeConversationExtractor:
                                             "timestamp": entry.get("timestamp", ""),
                                         }
                                     )
-                        
+
+                        # A message typed while a turn is still running is
+                        # queued and stored as an attachment, never as a
+                        # "user" entry, so it needs its own branch.
+                        elif entry.get("type") == "attachment":
+                            queued = self._extract_queued_command(entry)
+                            if queued:
+                                conversation.append(queued)
+
                         # Include tool use and system messages if detailed mode
                         elif detailed:
                             # Extract tool use events
@@ -162,6 +179,76 @@ class ClaudeConversationExtractor:
 
         return conversation
 
+    def _extract_tool_results(self, content, timestamp: str) -> List[Dict[str, str]]:
+        """Build conversation items for the tool results in a user entry.
+
+        A tool result is a content block inside a user entry, not a
+        top-level entry of its own, so it is easy to miss: the entry carries
+        no text and therefore looks empty.
+
+        Args:
+            content: The "content" of a user message
+            timestamp: The timestamp of the entry the blocks came from
+
+        Returns:
+            One conversation item per tool_result block, in order
+        """
+        if not isinstance(content, list):
+            return []
+
+        results = []
+        for item in content:
+            if not isinstance(item, dict) or item.get("type") != "tool_result":
+                continue
+            output = self._extract_text_content(item.get("content", ""))
+            if item.get("is_error"):
+                output = f"[error] {output}"
+            results.append(
+                {
+                    "role": "tool_result",
+                    "content": f"📤 Result:\n{output}",
+                    "timestamp": timestamp,
+                }
+            )
+        return results
+
+    def _extract_queued_command(self, entry: Dict) -> Optional[Dict[str, str]]:
+        """Build a conversation item from a queued human message.
+
+        A message typed while a turn is still running is not written to the
+        log as a "user" entry. Claude Code queues it and records it as an
+        attachment of type "queued_command". Commands queued by the tool
+        itself (task notifications, peer messages) are ignored, so only what
+        the human actually typed is returned.
+
+        Args:
+            entry: A decoded JSONL entry whose type is "attachment"
+
+        Returns:
+            The conversation item, or None if this is not a human message
+        """
+        attachment = entry.get("attachment")
+        if not isinstance(attachment, dict):
+            return None
+        if attachment.get("type") != "queued_command":
+            return None
+
+        origin = attachment.get("origin")
+        if not isinstance(origin, dict) or origin.get("kind") != "human":
+            return None
+
+        # "prompt" is a plain string for a typed message, and a list of
+        # content blocks when the message carried an image or a file.
+        text = self._extract_text_content(attachment.get("prompt", ""))
+        if not text or not text.strip():
+            return None
+
+        return {
+            "role": "user",
+            "content": text,
+            "timestamp": attachment.get("timestamp", "") or entry.get("timestamp", ""),
+        }
+
     def _extract_text_content(self, content, detailed: bool = False) -> str:
         """Extract text from various content formats Claude uses.
         
@@ -178,6 +265,13 @@ class ClaudeConversationExtractor:
                 if isinstance(item, dict):
                     if item.get("type") == "text":
                         text_parts.append(item.get("text", ""))
+                    elif item.get("type") == "thinking":
+                        # Extended thinking is the assistant's own words and
+                        # was being dropped on the floor. Where the block
+                        # holds no text there is nothing to recover.
+                        thought = item.get("thinking", "")
+                        if thought and thought.strip():
+                            text_parts.append(f"\n🧠 Thinking:\n{thought}\n")
                     elif detailed and item.get("type") == "tool_use":
                         # Include tool use details in detailed mode
                         tool_name = item.get("name", "unknown")
@@ -320,24 +414,31 @@ class ClaudeConversationExtractor:
             for msg in conversation:
                 role = msg["role"]
                 content = msg["content"]
-                
+
+                # Every item already carries the timestamp of the entry it
+                # came from, but only the first one was ever used. The raw
+                # ISO value is written rather than a reformatted one, so no
+                # time zone information is silently dropped.
+                timestamp = msg.get("timestamp", "")
+                stamp = f" [{timestamp}]" if timestamp else ""
+
                 if role == "user":
-                    f.write("## 👤 User\n\n")
+                    f.write(f"## 👤 User{stamp}\n\n")
                     f.write(f"{content}\n\n")
                 elif role == "assistant":
-                    f.write("## 🤖 Claude\n\n")
+                    f.write(f"## 🤖 Claude{stamp}\n\n")
                     f.write(f"{content}\n\n")
                 elif role == "tool_use":
-                    f.write("### 🔧 Tool Use\n\n")
+                    f.write(f"### 🔧 Tool Use{stamp}\n\n")
                     f.write(f"{content}\n\n")
                 elif role == "tool_result":
-                    f.write("### 📤 Tool Result\n\n")
+                    f.write(f"### 📤 Tool Result{stamp}\n\n")
                     f.write(f"{content}\n\n")
                 elif role == "system":
-                    f.write("### ℹ️ System\n\n")
+                    f.write(f"### ℹ️ System{stamp}\n\n")
                     f.write(f"{content}\n\n")
                 else:
-                    f.write(f"## {role}\n\n")
+                    f.write(f"## {role}{stamp}\n\n")
                     f.write(f"{content}\n\n")
                 f.write("---\n\n")
 
