@@ -265,6 +265,13 @@ class ClaudeConversationExtractor:
                 if isinstance(item, dict):
                     if item.get("type") == "text":
                         text_parts.append(item.get("text", ""))
+                    elif item.get("type") == "thinking":
+                        # Extended thinking is the assistant's own words and
+                        # was being dropped on the floor. Where the block
+                        # holds no text there is nothing to recover.
+                        thought = item.get("thinking", "")
+                        if thought and thought.strip():
+                            text_parts.append(f"\n🧠 Thinking:\n{thought}\n")
                     elif detailed and item.get("type") == "tool_use":
                         # Include tool use details in detailed mode
                         tool_name = item.get("name", "unknown")
