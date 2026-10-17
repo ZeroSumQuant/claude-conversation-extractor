@@ -414,24 +414,31 @@ class ClaudeConversationExtractor:
             for msg in conversation:
                 role = msg["role"]
                 content = msg["content"]
-                
+
+                # Every item already carries the timestamp of the entry it
+                # came from, but only the first one was ever used. The raw
+                # ISO value is written rather than a reformatted one, so no
+                # time zone information is silently dropped.
+                timestamp = msg.get("timestamp", "")
+                stamp = f" [{timestamp}]" if timestamp else ""
+
                 if role == "user":
-                    f.write("## 👤 User\n\n")
+                    f.write(f"## 👤 User{stamp}\n\n")
                     f.write(f"{content}\n\n")
                 elif role == "assistant":
-                    f.write("## 🤖 Claude\n\n")
+                    f.write(f"## 🤖 Claude{stamp}\n\n")
                     f.write(f"{content}\n\n")
                 elif role == "tool_use":
-                    f.write("### 🔧 Tool Use\n\n")
+                    f.write(f"### 🔧 Tool Use{stamp}\n\n")
                     f.write(f"{content}\n\n")
                 elif role == "tool_result":
-                    f.write("### 📤 Tool Result\n\n")
+                    f.write(f"### 📤 Tool Result{stamp}\n\n")
                     f.write(f"{content}\n\n")
                 elif role == "system":
-                    f.write("### ℹ️ System\n\n")
+                    f.write(f"### ℹ️ System{stamp}\n\n")
                     f.write(f"{content}\n\n")
                 else:
-                    f.write(f"## {role}\n\n")
+                    f.write(f"## {role}{stamp}\n\n")
                     f.write(f"{content}\n\n")
                 f.write("---\n\n")
 
