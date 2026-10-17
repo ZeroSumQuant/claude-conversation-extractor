@@ -111,7 +111,15 @@ class ClaudeConversationExtractor:
                                             "timestamp": entry.get("timestamp", ""),
                                         }
                                     )
-                        
+
+                        # A message typed while a turn is still running is
+                        # queued and stored as an attachment, never as a
+                        # "user" entry, so it needs its own branch.
+                        elif entry.get("type") == "attachment":
+                            queued = self._extract_queued_command(entry)
+                            if queued:
+                                conversation.append(queued)
+
                         # Include tool use and system messages if detailed mode
                         elif detailed:
                             # Extract tool use events
@@ -161,6 +169,43 @@ class ClaudeConversationExtractor:
             print(f"❌ Error reading file {jsonl_path}: {e}")
 
         return conversation
+
+    def _extract_queued_command(self, entry: Dict) -> Optional[Dict[str, str]]:
+        """Build a conversation item from a queued human message.
+
+        A message typed while a turn is still running is not written to the
+        log as a "user" entry. Claude Code queues it and records it as an
+        attachment of type "queued_command". Commands queued by the tool
+        itself (task notifications, peer messages) are ignored, so only what
+        the human actually typed is returned.
+
+        Args:
+            entry: A decoded JSONL entry whose type is "attachment"
+
+        Returns:
+            The conversation item, or None if this is not a human message
+        """
+        attachment = entry.get("attachment")
+        if not isinstance(attachment, dict):
+            return None
+        if attachment.get("type") != "queued_command":
+            return None
+
+        origin = attachment.get("origin")
+        if not isinstance(origin, dict) or origin.get("kind") != "human":
+            return None
+
+        # "prompt" is a plain string for a typed message, and a list of
+        # content blocks when the message carried an image or a file.
+        text = self._extract_text_content(attachment.get("prompt", ""))
+        if not text or not text.strip():
+            return None
+
+        return {
+            "role": "user",
+            "content": text,
+            "timestamp": attachment.get("timestamp", "") or entry.get("timestamp", ""),
+        }
 
     def _extract_text_content(self, content, detailed: bool = False) -> str:
         """Extract text from various content formats Claude uses.
