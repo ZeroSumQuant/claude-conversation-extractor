@@ -96,6 +96,15 @@ class ClaudeConversationExtractor:
                                         }
                                     )
 
+                                # Tool results arrive as content blocks of a
+                                # user entry, not as entries of their own.
+                                if detailed:
+                                    conversation.extend(
+                                        self._extract_tool_results(
+                                            content, entry.get("timestamp", "")
+                                        )
+                                    )
+
                         # Extract assistant messages
                         elif entry.get("type") == "assistant" and "message" in entry:
                             msg = entry["message"]
@@ -169,6 +178,39 @@ class ClaudeConversationExtractor:
             print(f"❌ Error reading file {jsonl_path}: {e}")
 
         return conversation
+
+    def _extract_tool_results(self, content, timestamp: str) -> List[Dict[str, str]]:
+        """Build conversation items for the tool results in a user entry.
+
+        A tool result is a content block inside a user entry, not a
+        top-level entry of its own, so it is easy to miss: the entry carries
+        no text and therefore looks empty.
+
+        Args:
+            content: The "content" of a user message
+            timestamp: The timestamp of the entry the blocks came from
+
+        Returns:
+            One conversation item per tool_result block, in order
+        """
+        if not isinstance(content, list):
+            return []
+
+        results = []
+        for item in content:
+            if not isinstance(item, dict) or item.get("type") != "tool_result":
+                continue
+            output = self._extract_text_content(item.get("content", ""))
+            if item.get("is_error"):
+                output = f"[error] {output}"
+            results.append(
+                {
+                    "role": "tool_result",
+                    "content": f"📤 Result:\n{output}",
+                    "timestamp": timestamp,
+                }
+            )
+        return results
 
     def _extract_queued_command(self, entry: Dict) -> Optional[Dict[str, str]]:
         """Build a conversation item from a queued human message.
